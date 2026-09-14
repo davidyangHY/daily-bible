@@ -1,0 +1,66 @@
+{
+  "name": "daily-bible",
+  "productName": "Daily Bible",
+  "version": "1.0.0",
+  "description": "Daily Bible — a full offline Bible (World English Bible) with a daily reading plan, timer, streaks, search, and bookmarks. Built with Electron.",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "build:bible": "node scripts/build-bible.js",
+    "build:headings": "node scripts/build-headings.js",
+    "make:icon": "node scripts/make-icon.js && node scripts/make-ico.js",
+    "pack": "electron-builder --dir",
+    "dist": "electron-builder"
+  },
+  "keywords": [
+    "bible",
+    "reading",
+    "tracker",
+    "electron"
+  ],
+  "author": "",
+  "license": "MIT",
+  "devDependencies": {
+    "electron": "33.4.11",
+    "electron-builder": "24.13.3"
+  },
+  "dependencies": {
+    "better-sqlite3": "11.8.1"
+  },
+  "build": {
+    "appId": "com.dyang.dailybible",
+    "productName": "Daily Bible",
+    "npmRebuild": false,
+    "directories": {
+      "output": "dist",
+      "buildResources": "build"
+    },
+    "files": [
+      "**/*",
+      "!dist/**",
+      "!scripts/**",
+      "!**/*.md"
+    ],
+    "asarUnpack": [
+      "**/node_modules/better-sqlite3/**"
+    ],
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "icon": "build/icon.ico"
+    },
+    "nsis": {
+      "oneClick": true,
+      "perMachine": false,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "Daily Bible"
+    }
+  }
+}

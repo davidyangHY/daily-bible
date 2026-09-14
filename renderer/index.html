@@ -1,0 +1,248 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta http-equiv="Content-Security-Policy"
+        content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:;" />
+  <title>Daily Bible</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <!-- ===== Launch modal ===== -->
+  <div id="modal" class="modal" hidden>
+    <div class="modal-card">
+      <div class="modal-eyebrow" id="modalDate">Today</div>
+      <h1 class="modal-title">Today's Reading</h1>
+      <p class="modal-sub" id="modalSub">Your chapters for today</p>
+      <div id="modalChapters" class="modal-chapters"></div>
+      <div class="modal-actions">
+        <button id="startReadingBtn" class="btn btn-primary btn-lg">Start Reading</button>
+        <button id="browseBtn" class="btn btn-ghost">Just browse</button>
+      </div>
+      <div id="modalDone" class="modal-done" hidden>✓ You've completed today's reading</div>
+    </div>
+  </div>
+
+  <!-- ===== App shell ===== -->
+  <header class="topbar">
+    <div class="brand">
+      <img src="../assets/icon.png" alt="" class="brand-icon" />
+      <span class="brand-name">Daily Bible</span>
+    </div>
+    <nav class="tabs">
+      <button class="tab is-active" data-view="read">Read</button>
+      <button class="tab" data-view="search">Search</button>
+      <button class="tab" data-view="plan">Plan</button>
+      <button class="tab" data-view="bookmarks">Bookmarks</button>
+      <button class="tab" data-view="progress">Progress</button>
+    </nav>
+    <div class="topbar-right">
+      <div class="streak" id="streakBadge" title="Current streak">
+        <span class="streak-flame">🔥</span>
+        <span class="streak-num" id="streakNum">0</span>
+        <span class="streak-label">day streak</span>
+      </div>
+    </div>
+  </header>
+
+  <!-- ===== Read view ===== -->
+  <main id="view-read" class="view">
+    <div class="reader-toolbar">
+      <div class="selectors">
+        <label class="field">
+          <span class="field-label">Book</span>
+          <select id="bookSelect" class="select"></select>
+        </label>
+        <label class="field">
+          <span class="field-label">Chapter</span>
+          <select id="chapterSelect" class="select"></select>
+        </label>
+        <div class="nav-btns">
+          <button id="prevChapter" class="btn btn-icon" title="Previous chapter (←)">‹</button>
+          <button id="nextChapter" class="btn btn-icon" title="Next chapter (→)">›</button>
+        </div>
+        <div class="font-ctrl">
+          <button id="fontDown" class="btn btn-icon" title="Smaller text">A−</button>
+          <button id="fontUp" class="btn btn-icon" title="Larger text">A+</button>
+        </div>
+      </div>
+      <div class="today-plan">
+        <span class="today-plan-label">Today's plan:</span>
+        <div id="planChips" class="plan-chips"></div>
+      </div>
+    </div>
+
+    <div class="today-strip">
+      <div class="today-strip-left">
+        <span id="todayProgressText">Today's reading</span>
+        <div class="mini-progress"><div id="todayProgressBar" class="mini-progress-fill"></div></div>
+      </div>
+      <button id="markChapterReadBtn" class="btn btn-sm">✓ Mark chapter read</button>
+      <button id="markCompleteBtn" class="btn btn-success btn-sm">Mark today complete</button>
+      <span id="todayDoneBadge" class="today-done-badge" hidden>✓ Completed today</span>
+    </div>
+
+    <section class="reader">
+      <h2 id="chapterTitle" class="chapter-title">Genesis 1</h2>
+      <div id="chapterBody" class="chapter-body"></div>
+    </section>
+  </main>
+
+  <!-- ===== Search view ===== -->
+  <main id="view-search" class="view scroll-view" hidden>
+    <div class="search-bar">
+      <input id="searchInput" class="search-input" type="text" placeholder="Search the whole Bible…  (e.g. love, shepherd, faith)" />
+      <button id="searchBtn" class="btn btn-primary">Search</button>
+    </div>
+    <div id="searchMeta" class="search-meta"></div>
+    <div id="searchResults" class="search-results"></div>
+  </main>
+
+  <!-- ===== Plan view ===== -->
+  <main id="view-plan" class="view scroll-view" hidden>
+    <div class="plan-view-head">
+      <div>
+        <h2 class="section-title">Your plan</h2>
+        <p id="planViewSub" class="plan-view-sub"></p>
+      </div>
+      <button id="editPlanBtn2" class="btn btn-primary btn-sm">Create / edit plan</button>
+    </div>
+    <div id="planBooks" class="plan-books"></div>
+  </main>
+
+  <!-- ===== Bookmarks view ===== -->
+  <main id="view-bookmarks" class="view scroll-view" hidden>
+    <h2 class="section-title">Bookmarks</h2>
+    <div id="bookmarksList" class="bookmarks-list"></div>
+    <div id="bookmarksEmpty" class="empty-state" hidden>
+      No bookmarks yet. While reading, click a verse to bookmark it.
+    </div>
+  </main>
+
+  <!-- ===== Progress view ===== -->
+  <main id="view-progress" class="view scroll-view" hidden>
+    <div class="stats-grid">
+      <div class="stat-card">
+        <div class="stat-value" id="statStreak">0</div>
+        <div class="stat-label">Current streak</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-value" id="statLongest">0</div>
+        <div class="stat-label">Longest streak</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-value" id="statDays">0</div>
+        <div class="stat-label">Days completed</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-value" id="statChapters">0</div>
+        <div class="stat-label">Chapters read</div>
+      </div>
+    </div>
+
+    <section class="panel">
+      <div class="panel-head">
+        <h3>Reading plan</h3>
+        <div class="panel-head-right">
+          <span id="planProgressLabel" class="panel-note">Day 0 of 365</span>
+          <button id="editPlanBtn" class="btn btn-sm btn-primary">Create / edit plan</button>
+          <button id="resetProgressBtn" class="btn btn-sm btn-danger">Reset progress</button>
+        </div>
+      </div>
+      <div class="mini-progress big"><div id="planProgressBar" class="mini-progress-fill"></div></div>
+      <div class="plan-controls">
+        <label class="field-inline">
+          <span class="field-label">Start date (Day 1)</span>
+          <input type="date" id="startDateInput" class="date-input" />
+        </label>
+        <button id="setStartBtn" class="btn btn-sm">Update start date</button>
+        <span class="plan-controls-hint">Set an earlier date if you've already been reading.</span>
+      </div>
+    </section>
+
+    <section class="panel">
+      <div class="panel-head">
+        <h3>Reading calendar</h3>
+        <div class="cal-nav">
+          <button id="calPrev" class="btn btn-icon" title="Previous month">‹</button>
+          <span id="calMonthLabel" class="cal-month-label">—</span>
+          <button id="calNext" class="btn btn-icon" title="Next month">›</button>
+        </div>
+      </div>
+      <div class="month-cal">
+        <div class="month-weekdays">
+          <span>Sun</span><span>Mon</span><span>Tue</span><span>Wed</span><span>Thu</span><span>Fri</span><span>Sat</span>
+        </div>
+        <div id="monthGrid" class="month-grid"></div>
+      </div>
+      <div id="calendarNote" class="panel-note calendar-note"></div>
+    </section>
+  </main>
+
+  <!-- ===== Plan builder ===== -->
+  <div id="planModal" class="modal" hidden>
+    <div class="modal-card plan-card">
+      <div class="plan-modal-head">
+        <h2 class="plan-modal-title">Your reading plan</h2>
+        <button id="planClose" class="btn btn-ghost plan-close">✕</button>
+      </div>
+      <p class="plan-modal-sub">Pick the books, set the order, and choose your pace. Most people jump around — that's fine.</p>
+
+      <div class="plan-presets">
+        <span class="plan-section-label">Quick start</span>
+        <div class="preset-row">
+          <button class="preset" data-preset="nt">New Testament</button>
+          <button class="preset" data-preset="gospels">Gospels</button>
+          <button class="preset" data-preset="ot">Old Testament</button>
+          <button class="preset" data-preset="torah">Torah</button>
+          <button class="preset" data-preset="wisdom">Psalms &amp; Proverbs</button>
+        </div>
+      </div>
+
+      <div class="plan-add">
+        <span class="plan-section-label">Add a book</span>
+        <div class="plan-add-row">
+          <select id="planBookSelect" class="select"></select>
+          <button id="planAddBtn" class="btn btn-sm">Add</button>
+        </div>
+      </div>
+
+      <div class="plan-order-wrap">
+        <span class="plan-section-label">Your reading order <span id="planOrderCount" class="plan-note"></span></span>
+        <div id="planOrder" class="plan-order"></div>
+        <div id="planOrderEmpty" class="plan-empty" hidden>No books yet — use a quick start or add books above.</div>
+      </div>
+
+      <div class="plan-footer">
+        <label class="plan-pace">
+          <span class="plan-section-label">Chapters / day</span>
+          <select id="planPaceSelect" class="select">
+            <option>1</option><option>2</option><option selected>3</option><option>4</option><option>5</option>
+          </select>
+        </label>
+        <div id="planSummary" class="plan-summary">—</div>
+        <div class="plan-actions">
+          <button id="planUseDefault" class="btn btn-ghost">Use whole Bible</button>
+          <button id="planSave" class="btn btn-primary">Save plan</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ===== Confirm dialog ===== -->
+  <div id="confirmModal" class="modal" hidden>
+    <div class="modal-card confirm-card">
+      <h2 id="confirmTitle" class="confirm-title">Are you sure?</h2>
+      <p id="confirmMsg" class="confirm-msg"></p>
+      <div class="modal-actions">
+        <button id="confirmCancel" class="btn">Cancel</button>
+        <button id="confirmOk" class="btn btn-danger-solid">Confirm</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="toast" class="toast" hidden></div>
+
+  <script src="renderer.js"></script>
+</body>
+</html>
