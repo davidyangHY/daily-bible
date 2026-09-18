@@ -7,6 +7,7 @@
   "scripts": {
     "start": "electron .",
     "build:bible": "node scripts/build-bible.js",
+    "build:versions": "node scripts/build-versions.js",
     "build:headings": "node scripts/build-headings.js",
     "make:icon": "node scripts/make-icon.js && node scripts/make-ico.js",
     "pack": "electron-builder --dir",
@@ -25,6 +26,7 @@
     "electron-builder": "24.13.3"
   },
   "dependencies": {
+    "@anthropic-ai/sdk": "^0.126.0",
     "better-sqlite3": "11.8.1"
   },
   "build": {

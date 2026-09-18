@@ -6,6 +6,8 @@ const FONT_MIN = 16;
 const FONT_MAX = 30;
 const LS_FONT = 'db_font';
 const LS_LAST = 'db_last';
+const LS_FOCUS = 'db_focus';
+let scrollRaf = 0;
 
 const state = {
   bible: null,
@@ -18,6 +20,7 @@ const state = {
   bookmarks: new Set(), // refs "Book Chapter:Verse"
   calMonth: { year: new Date().getFullYear(), month: new Date().getMonth() },
   lastStats: null,
+  focus: false,
 };
 
 // ---------- helpers ----------
@@ -51,10 +54,13 @@ async function init() {
   state.bible.books.forEach((b, i) => state.bookIndex.set(b.name, i));
 
   state.fontSize = clampFont(parseFloat(localStorage.getItem(LS_FONT)) || 19.5);
+  try { state.focus = localStorage.getItem(LS_FOCUS) === '1'; } catch { state.focus = false; }
   await loadBookmarks();
+  await setupVersions();
 
   populateBookSelect();
   wireControls();
+  $('focusToggle').classList.toggle('is-on', state.focus);
 
   state.plan = await svc.getTodayPlan();
 
@@ -131,14 +137,22 @@ function renderChapter() {
   const body = $('chapterBody');
   body.style.fontSize = state.fontSize + 'px';
   body.innerHTML = '';
+  let section = document.createElement('div');
+  section.className = 'rsection';
+  body.appendChild(section);
   verses.forEach((text, i) => {
     const verseNo = i + 1;
     const ref = `${book.name} ${state.chapter}:${verseNo}`;
     if (chHeadings && chHeadings[verseNo]) {
+      if (section.childNodes.length > 0) {
+        section = document.createElement('div');
+        section.className = 'rsection';
+        body.appendChild(section);
+      }
       const h = document.createElement('h3');
       h.className = 'section-heading';
       h.textContent = chHeadings[verseNo];
-      body.appendChild(h);
+      section.appendChild(h);
     }
     const span = document.createElement('span');
     span.className = 'verse' + (state.bookmarks.has(ref) ? ' bookmarked' : '');
@@ -147,15 +161,202 @@ function renderChapter() {
     num.className = 'verse-num';
     num.textContent = verseNo;
     num.title = 'Click to bookmark';
-    num.addEventListener('click', () => toggleBookmark(verseNo, text));
+    num.addEventListener('click', (e) => { e.stopPropagation(); toggleBookmark(verseNo, text); });
     span.appendChild(num);
     span.appendChild(document.createTextNode(text + ' '));
-    body.appendChild(span);
+    section.appendChild(span);
+  });
+  document.querySelectorAll('#chapterBody .rsection').forEach((s) => {
+    s.addEventListener('click', () => { if (state.focus) setActiveSection(s); });
   });
   document.querySelector('.reader').scrollTop = 0;
 
+  applyFocus();
   saveLastPosition();
   highlightPlanChip();
+}
+
+// ---------- versions ----------
+async function setupVersions() {
+  const info = await svc.getVersions();
+  const sel = $('versionSelect');
+  sel.innerHTML = '';
+  info.available.forEach((v) => {
+    const o = document.createElement('option');
+    o.value = v.id;
+    o.textContent = v.id;
+    o.title = v.name;
+    sel.appendChild(o);
+  });
+  sel.value = info.current;
+}
+
+async function changeVersion(id) {
+  await svc.setVersion(id);
+  state.bible = await svc.getBible();
+  renderChapter();
+  toast(`Switched to ${id}`);
+}
+
+// ---------- focus mode ----------
+function applyFocus() {
+  document.body.classList.toggle('focus-on', state.focus);
+  if (state.focus) updateActiveSection();
+  else document.querySelectorAll('#chapterBody .rsection.active').forEach((s) => s.classList.remove('active'));
+}
+
+function setActiveSection(target) {
+  document.querySelectorAll('#chapterBody .rsection').forEach((s) => s.classList.toggle('active', s === target));
+}
+
+function updateActiveSection() {
+  const reader = document.querySelector('.reader');
+  const sections = [...document.querySelectorAll('#chapterBody .rsection')];
+  if (!sections.length) return;
+  const line = reader.getBoundingClientRect().top + reader.clientHeight * 0.28;
+  let active = sections[0];
+  for (const s of sections) {
+    if (s.getBoundingClientRect().top <= line) active = s;
+    else break;
+  }
+  sections.forEach((s) => s.classList.toggle('active', s === active));
+}
+
+function toggleFocus() {
+  state.focus = !state.focus;
+  $('focusToggle').classList.toggle('is-on', state.focus);
+  try { localStorage.setItem(LS_FOCUS, state.focus ? '1' : '0'); } catch { /* ignore */ }
+  applyFocus();
+}
+
+// ---------- AI study helper ----------
+function currentBookName() {
+  return state.bible.books[state.bookIdx].name;
+}
+
+function openStudy() {
+  $('aiTitle').textContent = `Study — ${currentBookName()} ${state.chapter}`;
+  $('aiModal').hidden = false;
+  refreshAiView();
+}
+function closeStudy() { $('aiModal').hidden = true; }
+
+async function refreshAiView() {
+  const st = await svc.aiStatus();
+  if (st.ready) {
+    $('aiSetup').hidden = true;
+    $('aiMain').hidden = false;
+    $('aiBody').innerHTML = '';
+    loadExplanation();
+  } else {
+    $('aiMain').hidden = true;
+    showSetup(st);
+  }
+}
+
+function showSetup(st) {
+  $('aiSetup').hidden = false;
+  const prov = st.provider || 'ollama';
+  document.querySelectorAll('.ai-prov').forEach((b) => b.classList.toggle('is-on', b.dataset.prov === prov));
+  $('aiOllamaSetup').hidden = prov !== 'ollama';
+  $('aiAnthropicSetup').hidden = prov !== 'anthropic';
+  if (prov === 'ollama') renderOllamaPanel(st.ollama);
+}
+
+async function selectProvider(prov) {
+  await svc.aiSetProvider(prov);
+  showSetup(await svc.aiStatus());
+}
+
+function renderOllamaPanel(oll) {
+  const running = !!(oll && oll.running);
+  $('aiOllamaRunning').hidden = !running;
+  $('aiOllamaMissing').hidden = running;
+  if (!running) return;
+  const sel = $('aiOllamaModel');
+  sel.innerHTML = '';
+  if (!oll.models.length) {
+    const o = document.createElement('option');
+    o.value = '';
+    o.textContent = 'No models installed yet';
+    sel.appendChild(o);
+    $('aiOllamaMsg').textContent = 'Pull a model first, e.g. "ollama pull llama3.2".';
+  } else {
+    oll.models.forEach((m) => {
+      const o = document.createElement('option');
+      o.value = m;
+      o.textContent = m;
+      sel.appendChild(o);
+    });
+    if (oll.model && oll.models.includes(oll.model)) sel.value = oll.model;
+    $('aiOllamaMsg').textContent = '';
+  }
+}
+
+async function recheckOllama() {
+  renderOllamaPanel((await svc.aiStatus()).ollama);
+}
+
+async function saveOllamaModel() {
+  const model = $('aiOllamaModel').value;
+  if (!model) { $('aiOllamaMsg').textContent = 'Pull a model first, then re-check.'; return; }
+  await svc.aiSetOllamaModel(model);
+  refreshAiView();
+}
+
+async function openAiSettings() {
+  $('aiMain').hidden = true;
+  showSetup(await svc.aiStatus());
+}
+
+function aiCard(label, text) {
+  const el = document.createElement('div');
+  el.className = 'ai-entry';
+  const lab = document.createElement('div');
+  lab.className = 'ai-entry-label';
+  lab.textContent = label;
+  const body = document.createElement('div');
+  body.className = 'ai-entry-body';
+  body.textContent = text;
+  el.appendChild(lab);
+  el.appendChild(body);
+  return { el, setText: (t) => { body.textContent = t; } };
+}
+
+async function loadExplanation() {
+  const book = currentBookName();
+  const chapter = state.chapter;
+  const card = aiCard('Explanation', 'Thinking…');
+  $('aiBody').appendChild(card.el);
+  const res = await svc.aiExplain({ book, chapter });
+  card.setText(res.error ? '⚠ ' + res.error : res.text);
+}
+
+async function askQuestion() {
+  const q = $('aiQuestion').value.trim();
+  if (!q) return;
+  $('aiQuestion').value = '';
+  const book = currentBookName();
+  const chapter = state.chapter;
+  const qCard = aiCard('You asked', q);
+  qCard.el.classList.add('ai-q');
+  $('aiBody').appendChild(qCard.el);
+  const aCard = aiCard('Answer', 'Thinking…');
+  $('aiBody').appendChild(aCard.el);
+  aCard.el.scrollIntoView({ block: 'end' });
+  const res = await svc.aiAsk({ book, chapter, question: q });
+  aCard.setText(res.error ? '⚠ ' + res.error : res.text);
+  aCard.el.scrollIntoView({ block: 'end' });
+}
+
+async function saveAiKey() {
+  const key = $('aiKeyInput').value.trim();
+  $('aiSetupMsg').textContent = '';
+  const res = await svc.aiSetKey(key);
+  if (!res.ok) { $('aiSetupMsg').textContent = res.error || 'Could not save key.'; return; }
+  await svc.aiSetProvider('anthropic');
+  $('aiKeyInput').value = '';
+  refreshAiView();
 }
 
 function goToChapter(bookIdx, chapter) {
@@ -328,17 +529,16 @@ function highlightPlanChip() {
 }
 
 async function updateTodayStrip() {
-  const planLabels = state.plan.chapters.map((c) => `${c.book} ${c.chapter}`);
-  const readList = new Set(await svc.getChaptersReadToday());
-  const readCount = planLabels.filter((l) => readList.has(l)).length;
-  const total = planLabels.length;
+  const total = state.plan.chapters.length; // today's goal (any chapters count)
+  const readToday = await svc.getChaptersReadToday(); // distinct chapters read today, any book
+  const readCount = Math.min(readToday.length, total);
   const status = await svc.getTodayStatus();
 
   const pct = total ? Math.round((readCount / total) * 100) : 0;
-  $('todayProgressBar').style.width = (status.complete ? 100 : pct) + '%';
+  $('todayProgressBar').style.width = pct + '%';
   $('todayProgressText').textContent = status.complete
     ? "Today's reading complete"
-    : `Today's plan · ${readCount}/${total} chapters read`;
+    : `Today's reading · ${readCount}/${total} chapters`;
   $('markCompleteBtn').hidden = status.complete;
   $('todayDoneBadge').hidden = !status.complete;
 }
@@ -508,6 +708,27 @@ function removePlanBook(idx) {
 function applyPreset(key) {
   planEditor.order = presetOrder(key);
   renderPlanEditor();
+}
+
+async function generateAiPlan() {
+  const prompt = $('aiPlanPrompt').value.trim();
+  if (!prompt) return;
+  const msg = $('aiPlanMsg');
+  msg.textContent = 'Generating…';
+  const res = await svc.aiPlan(prompt);
+  if (res.error) {
+    msg.textContent = /No API key|local model|Ollama/i.test(res.error)
+      ? res.error + ' Set up the AI helper in Study (open it on any chapter).'
+      : res.error;
+    return;
+  }
+  planEditor.order = res.order;
+  planEditor.pace = res.pace;
+  $('planPaceSelect').value = String(res.pace);
+  renderPlanEditor();
+  const chapters = res.order.reduce((n, name) => n + chapterCountOf(name), 0);
+  const days = Math.max(1, Math.ceil(chapters / res.pace));
+  msg.textContent = `Built a ${res.order.length}-book, ~${days}-day plan below — review and Save.`;
 }
 
 async function savePlan() {
@@ -800,6 +1021,22 @@ function wireControls() {
   $('nextChapter').addEventListener('click', () => stepChapter(1));
   $('fontDown').addEventListener('click', () => setFont(-1.5));
   $('fontUp').addEventListener('click', () => setFont(1.5));
+  $('focusToggle').addEventListener('click', toggleFocus);
+  $('versionSelect').addEventListener('change', (e) => changeVersion(e.target.value));
+  $('studyBtn').addEventListener('click', openStudy);
+  $('aiClose').addEventListener('click', closeStudy);
+  $('aiSaveKey').addEventListener('click', saveAiKey);
+  $('aiForget').addEventListener('click', openAiSettings);
+  $('aiSend').addEventListener('click', askQuestion);
+  $('aiQuestion').addEventListener('keydown', (e) => { if (e.key === 'Enter') askQuestion(); });
+  $('aiKeyInput').addEventListener('keydown', (e) => { if (e.key === 'Enter') saveAiKey(); });
+  document.querySelectorAll('.ai-prov').forEach((b) => b.addEventListener('click', () => selectProvider(b.dataset.prov)));
+  $('aiOllamaSave').addEventListener('click', saveOllamaModel);
+  $('aiOllamaRecheck').addEventListener('click', recheckOllama);
+  document.querySelector('.reader').addEventListener('scroll', () => {
+    if (!state.focus || scrollRaf) return;
+    scrollRaf = requestAnimationFrame(() => { scrollRaf = 0; updateActiveSection(); });
+  });
   $('markChapterReadBtn').addEventListener('click', markChapterRead);
   $('markCompleteBtn').addEventListener('click', markComplete);
   $('resetProgressBtn').addEventListener('click', resetProgress);
@@ -810,6 +1047,8 @@ function wireControls() {
   $('planAddBtn').addEventListener('click', addPlanBook);
   $('planUseDefault').addEventListener('click', useDefaultPlan);
   $('planSave').addEventListener('click', savePlan);
+  $('aiPlanBtn').addEventListener('click', generateAiPlan);
+  $('aiPlanPrompt').addEventListener('keydown', (e) => { if (e.key === 'Enter') generateAiPlan(); });
   $('planPaceSelect').addEventListener('change', (e) => { planEditor.pace = parseInt(e.target.value, 10) || 3; updatePlanSummary(); });
   document.querySelectorAll('.preset').forEach((b) => b.addEventListener('click', () => applyPreset(b.dataset.preset)));
   $('calPrev').addEventListener('click', () => shiftMonth(-1));
@@ -820,7 +1059,7 @@ function wireControls() {
   document.querySelectorAll('.tab').forEach((t) => t.addEventListener('click', () => switchView(t.dataset.view)));
 
   document.addEventListener('keydown', (e) => {
-    if (!$('modal').hidden || !$('confirmModal').hidden || !$('planModal').hidden) return;
+    if (!$('modal').hidden || !$('confirmModal').hidden || !$('planModal').hidden || !$('aiModal').hidden) return;
     if (['INPUT', 'SELECT', 'TEXTAREA'].includes(e.target.tagName)) return;
     if (!$('view-read').hidden) {
       if (e.key === 'ArrowLeft') stepChapter(-1);

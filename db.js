@@ -34,8 +34,27 @@ function init(dbPath) {
       key   TEXT PRIMARY KEY,
       value TEXT
     );
+
+    CREATE TABLE IF NOT EXISTS ai_cache (
+      key        TEXT PRIMARY KEY,   -- "<version>|<book>|<chapter>|<kind>"
+      content    TEXT NOT NULL,
+      created_at TEXT NOT NULL
+    );
   `);
   return db;
+}
+
+/* ---------------- AI response cache ---------------- */
+
+function getAiCache(key) {
+  const row = db.prepare(`SELECT content FROM ai_cache WHERE key = ?`).get(key);
+  return row ? row.content : null;
+}
+
+function setAiCache(key, content) {
+  db.prepare(`INSERT INTO ai_cache (key, content, created_at) VALUES (?, ?, ?)
+              ON CONFLICT(key) DO UPDATE SET content = excluded.content, created_at = excluded.created_at`)
+    .run(key, content, new Date().toISOString());
 }
 
 /* ---------------- settings / meta ---------------- */
@@ -167,11 +186,11 @@ function getChaptersReadOn(date) {
   return [...set];
 }
 
-function getStats(today) {
-  const completedList = getCompletedDates();
+function getStats(today, opts = {}) {
+  const completedList = opts.completedDates || getCompletedDates();
   const completed = new Set(completedList);
   const totalSessions = db.prepare(`SELECT COUNT(*) n FROM sessions`).get().n;
-  const first = completedList[0] || null;
+  const first = opts.firstDate !== undefined ? opts.firstDate : (completedList[0] || null);
 
   // distinct chapters ever read
   const chapterSet = new Set();
@@ -264,6 +283,8 @@ module.exports = {
   getBookmarks,
   getMeta,
   setMeta,
+  getAiCache,
+  setAiCache,
   getPlanStart,
   setPlanStart,
   getPlanConfig,

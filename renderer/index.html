@@ -50,12 +50,16 @@
     <div class="reader-toolbar">
       <div class="selectors">
         <label class="field">
+          <span class="field-label">Version</span>
+          <select id="versionSelect" class="select select-sm"></select>
+        </label>
+        <label class="field">
           <span class="field-label">Book</span>
           <select id="bookSelect" class="select"></select>
         </label>
         <label class="field">
           <span class="field-label">Chapter</span>
-          <select id="chapterSelect" class="select"></select>
+          <select id="chapterSelect" class="select select-sm"></select>
         </label>
         <div class="nav-btns">
           <button id="prevChapter" class="btn btn-icon" title="Previous chapter (←)">‹</button>
@@ -64,6 +68,8 @@
         <div class="font-ctrl">
           <button id="fontDown" class="btn btn-icon" title="Smaller text">A−</button>
           <button id="fontUp" class="btn btn-icon" title="Larger text">A+</button>
+          <button id="focusToggle" class="btn btn-icon" title="Focus mode: highlight one section at a time">Focus</button>
+          <button id="studyBtn" class="btn btn-icon btn-study" title="AI study helper for this chapter">Study</button>
         </div>
       </div>
       <div class="today-plan">
@@ -186,7 +192,18 @@
         <h2 class="plan-modal-title">Your reading plan</h2>
         <button id="planClose" class="btn btn-ghost plan-close">✕</button>
       </div>
-      <p class="plan-modal-sub">Pick the books, set the order, and choose your pace. Most people jump around — that's fine.</p>
+      <p class="plan-modal-sub">Describe the plan you want and let AI build it — or set it up yourself below.</p>
+
+      <div class="ai-plan">
+        <span class="plan-section-label">Ask AI to build your plan</span>
+        <div class="ai-plan-row">
+          <input id="aiPlanPrompt" class="date-input ai-plan-input" type="text" placeholder="e.g. the New Testament in 60 days, or Psalms and the Gospels together" />
+          <button id="aiPlanBtn" class="btn btn-primary btn-sm">Generate</button>
+        </div>
+        <span id="aiPlanMsg" class="ai-msg ai-plan-msg"></span>
+      </div>
+
+      <div class="plan-divider"><span>or set it up yourself</span></div>
 
       <div class="plan-presets">
         <span class="plan-section-label">Quick start</span>
@@ -225,6 +242,65 @@
           <button id="planUseDefault" class="btn btn-ghost">Use whole Bible</button>
           <button id="planSave" class="btn btn-primary">Save plan</button>
         </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ===== AI study helper ===== -->
+  <div id="aiModal" class="modal" hidden>
+    <div class="modal-card ai-card">
+      <div class="plan-modal-head">
+        <h2 class="plan-modal-title" id="aiTitle">Study</h2>
+        <button id="aiClose" class="btn btn-ghost plan-close">✕</button>
+      </div>
+
+      <div id="aiSetup" class="ai-setup" hidden>
+        <p class="ai-setup-text">Choose how the study helper runs. Local is free and offline; Claude is higher quality but needs an API key.</p>
+        <div class="ai-provider-tabs">
+          <button class="ai-prov" data-prov="ollama">Local &middot; free</button>
+          <button class="ai-prov" data-prov="anthropic">Claude (API key)</button>
+        </div>
+
+        <div id="aiOllamaSetup" class="ai-prov-panel" hidden>
+          <p class="ai-setup-text">Runs a small open-source model on your own computer with Ollama — free, offline, no key.</p>
+          <div id="aiOllamaRunning" hidden>
+            <label class="field-inline">
+              <span class="field-label">Local model</span>
+              <select id="aiOllamaModel" class="select"></select>
+            </label>
+            <div class="ai-setup-actions">
+              <button id="aiOllamaSave" class="btn btn-primary btn-sm">Use this model</button>
+              <span id="aiOllamaMsg" class="ai-msg"></span>
+            </div>
+          </div>
+          <div id="aiOllamaMissing" hidden>
+            <p class="ai-setup-hint">Ollama isn't detected. Install it from ollama.com, start it, then pull a small model in a terminal:</p>
+            <pre class="ai-code">ollama pull llama3.2</pre>
+            <button id="aiOllamaRecheck" class="btn btn-sm">Re-check</button>
+          </div>
+        </div>
+
+        <div id="aiAnthropicSetup" class="ai-prov-panel" hidden>
+          <p class="ai-setup-text">Uses Claude (the lightest model) via the Anthropic API. Needs your own API key, stored on this computer; a small per-use cost. Passage text is sent to Anthropic when you use it.</p>
+          <label class="field-inline">
+            <span class="field-label">Anthropic API key</span>
+            <input id="aiKeyInput" class="date-input ai-key-input" type="password" placeholder="sk-ant-..." />
+          </label>
+          <div class="ai-setup-actions">
+            <button id="aiSaveKey" class="btn btn-primary btn-sm">Save key</button>
+            <span id="aiSetupMsg" class="ai-msg"></span>
+          </div>
+          <p class="ai-setup-hint">Get a key at console.anthropic.com → API Keys.</p>
+        </div>
+      </div>
+
+      <div id="aiMain" class="ai-main" hidden>
+        <div id="aiBody" class="ai-body"></div>
+        <div class="ai-ask">
+          <input id="aiQuestion" class="date-input ai-question" type="text" placeholder="Ask a question about this chapter…" />
+          <button id="aiSend" class="btn btn-primary btn-sm">Ask</button>
+        </div>
+        <button id="aiForget" class="btn btn-ghost ai-forget">AI settings</button>
       </div>
     </div>
   </div>
