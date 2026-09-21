@@ -23,7 +23,8 @@ const state = {
   lastStats: null,
   focus: false,
   aiReady: false,
-  planSelected: null,   // book name selected in the Plan overview
+  planSelected: null,   // book selected in the plan overview
+  allSelected: null,    // book selected in the all-books overview
 };
 
 // ---------- helpers ----------
@@ -962,9 +963,10 @@ function planBookOrder() {
 
 async function renderPlanView() {
   const readSet = new Set(await svc.getReadChapters());
+
+  // ----- Your plan -----
   const order = planBookOrder();
   const isCustom = !!(state.plan && state.plan.config && state.plan.config.order && state.plan.config.order.length);
-
   let total = 0;
   let read = 0;
   order.forEach((name) => {
@@ -978,16 +980,47 @@ async function renderPlanView() {
   $('planViewSub').textContent =
     `${isCustom ? 'Custom plan' : 'Whole Bible'} · ${order.length} books · ${read} / ${total} chapters read · ${pctAll}%`;
 
-  // Split by Testament — Old Testament first, then New Testament.
-  const inNT = (name) => { const i = state.bookIndex.get(name); return i != null && i >= OT_BOOKS; };
-  const groups = [
-    { name: 'Old Testament', books: order.filter((n) => !inNT(n)) },
-    { name: 'New Testament', books: order.filter(inNT) },
-  ].filter((g) => g.books.length);
-
   if (state.planSelected && !order.includes(state.planSelected)) state.planSelected = null;
+  renderBookGrid($('planBooks'), booksByTestament(order), readSet, state.planSelected, (name) => {
+    state.planSelected = name;
+    renderPlanView();
+    $('planDetail').scrollIntoView({ block: 'nearest' });
+  });
+  renderBookDetail($('planDetail'), state.planSelected, readSet);
 
-  const wrap = $('planBooks');
+  // ----- All books of the Bible -----
+  const allNames = state.bible.books.map((b) => b.name);
+  let doneBooks = 0;
+  let allRead = 0;
+  let allTotal = 0;
+  state.bible.books.forEach((b) => {
+    allTotal += b.chapters.length;
+    let rc = 0;
+    for (let c = 1; c <= b.chapters.length; c++) if (readSet.has(`${b.name} ${c}`)) rc++;
+    allRead += rc;
+    if (rc === b.chapters.length) doneBooks++;
+  });
+  $('allBooksSub').textContent =
+    `${doneBooks} / ${allNames.length} books finished · ${allRead} / ${allTotal} chapters read`;
+  renderBookGrid($('allBooks'), booksByTestament(allNames), readSet, state.allSelected, (name) => {
+    state.allSelected = name;
+    renderPlanView();
+    $('allBooksDetail').scrollIntoView({ block: 'nearest' });
+  });
+  renderBookDetail($('allBooksDetail'), state.allSelected, readSet);
+}
+
+// Group a list of book names into Old Testament, then New Testament.
+function booksByTestament(names) {
+  const inNT = (name) => { const i = state.bookIndex.get(name); return i != null && i >= OT_BOOKS; };
+  return [
+    { name: 'Old Testament', books: names.filter((n) => !inNT(n)) },
+    { name: 'New Testament', books: names.filter(inNT) },
+  ].filter((g) => g.books.length);
+}
+
+// Render a grid of book tiles (grouped by Testament) into `wrap`.
+function renderBookGrid(wrap, groups, readSet, selectedName, onSelect) {
   wrap.innerHTML = '';
   groups.forEach((g) => {
     let gTotal = 0;
@@ -1010,16 +1043,14 @@ async function renderPlanView() {
 
     const grid = document.createElement('div');
     grid.className = 'book-tiles';
-    g.books.forEach((name) => grid.appendChild(buildBookTile(name, readSet)));
+    g.books.forEach((name) => grid.appendChild(buildBookTile(name, readSet, selectedName, onSelect)));
     sec.appendChild(grid);
     wrap.appendChild(sec);
   });
-
-  renderPlanDetail(readSet);
 }
 
-// A compact tile in the overview grid.
-function buildBookTile(name, readSet) {
+// A compact tile in an overview grid.
+function buildBookTile(name, readSet, selectedName, onSelect) {
   const idx = state.bookIndex.get(name);
   const n = state.bible.books[idx].chapters.length;
   let rc = 0;
@@ -1031,25 +1062,18 @@ function buildBookTile(name, readSet) {
   const tile = document.createElement('button');
   tile.className = 'book-tile' +
     (complete ? ' complete' : started ? ' started' : '') +
-    (state.planSelected === name ? ' selected' : '');
+    (selectedName === name ? ' selected' : '');
   tile.innerHTML =
     `<span class="bt-name">${escapeHtml(name)}</span>` +
     `<span class="bt-meta">${complete ? '✓ done' : rc + ' / ' + n}</span>` +
     `<span class="bt-bar"><span class="bt-bar-fill" style="width:${pct}%"></span></span>`;
-  tile.addEventListener('click', () => {
-    state.planSelected = name;
-    renderPlanView();
-    const d = $('planDetail');
-    if (d) d.scrollIntoView({ block: 'nearest' });
-  });
+  tile.addEventListener('click', () => onSelect(name));
   return tile;
 }
 
-// The detail panel for the selected book: chapters + actions.
-function renderPlanDetail(readSet) {
-  const el = $('planDetail');
+// The detail panel for a selected book: chapters + actions.
+function renderBookDetail(el, name, readSet) {
   el.innerHTML = '';
-  const name = state.planSelected;
   if (!name) { el.hidden = true; return; }
   el.hidden = false;
 

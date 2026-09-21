@@ -49,7 +49,8 @@ redistributed.
 - Plan tab: every book in your plan shown at once as a compact grid of tiles (Old
   Testament, then New Testament), each with its own progress bar. Click a book to open
   a detail panel with its chapter grid, an "open in reader" button, and "mark book
-  complete".
+  complete". Below it, an "All books of the Bible" board shows all 66 books and your
+  progress on each — finished books turn green — as a whole-Bible tracker.
 - Mark a single chapter read, or mark the whole day complete, from the reader or
   the tray.
 - Streaks (current and longest), days completed, and chapters read.

@@ -513,6 +513,8 @@ body.ai-open .ai-panel { display: flex; }
 
 /* ============ Plan tab: all-books overview grid ============ */
 .plan-books { display: flex; flex-direction: column; gap: 20px; }
+.all-books-head { margin: 34px 0 18px; padding-top: 24px; border-top: 1px solid var(--border); }
+.all-books-head .section-title { margin: 0 0 4px; }
 .plan-section-head.static { display: flex; align-items: baseline; gap: 12px; padding: 0 2px 10px; cursor: default; border-bottom: 1px solid var(--border); margin-bottom: 12px; }
 .plan-section-head.static .ps-name { font-family: var(--read-font); font-size: 20px; color: var(--ink); font-weight: 600; }
 .plan-section-head.static .ps-count { margin-left: auto; color: var(--ink-soft); font-size: 13px; font-weight: 600; }
