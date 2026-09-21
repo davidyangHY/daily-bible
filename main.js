@@ -9,12 +9,12 @@ const {
 } = require('electron');
 const path = require('path');
 const fs = require('fs');
+const https = require('https');
+const http = require('http');
+const { execFile } = require('child_process');
 
 const db = require('./db');
 const { getPlanForDate } = require('./readingPlan');
-const Anthropic = require('@anthropic-ai/sdk');
-
-const AI_MODEL = 'claude-haiku-4-5'; // lightest model; explanations are simple
 
 const ICON_PATH = path.join(__dirname, 'assets', 'icon.png');
 const NOTIFY_HOUR = 20; // 8pm
@@ -129,9 +129,8 @@ function passageText(book, chapter) {
 
 const OLLAMA_URL = 'http://127.0.0.1:11434';
 
-function aiProvider() {
-  return db.getMeta('ai_provider') === 'anthropic' ? 'anthropic' : 'ollama'; // default: free local
-}
+const OLLAMA_INSTALLER_URL = 'https://ollama.com/download/OllamaSetup.exe';
+const DEFAULT_MODEL = 'llama3.2';
 
 async function ollamaModels() {
   try {
@@ -144,27 +143,140 @@ async function ollamaModels() {
   }
 }
 
-async function callClaude(system, userText, maxTokens) {
-  const apiKey = db.getMeta('anthropic_key');
-  if (!apiKey) return { error: 'No API key set.' };
-  try {
-    const client = new Anthropic({ apiKey });
-    const resp = await client.messages.create({
-      model: AI_MODEL,
-      max_tokens: maxTokens,
-      system,
-      messages: [{ role: 'user', content: userText }],
+// ---- Ollama auto-install -----------------------------------------------------
+function sendInstallProgress(phase, percent, message) {
+  if (mainWindow) {
+    mainWindow.webContents.send('ai:install-progress', {
+      phase,
+      percent: Math.max(0, Math.min(100, Math.round(percent || 0))),
+      message: message || '',
     });
-    const text = (resp.content || []).filter((b) => b.type === 'text').map((b) => b.text).join('\n').trim();
-    return { text };
-  } catch (e) {
-    if (e && e.status === 401) return { error: 'Invalid API key.' };
-    if (e && e.status === 429) return { error: 'Rate limited — try again in a moment.' };
-    return { error: (e && e.message) || 'Request failed.' };
   }
 }
 
-async function callOllama(system, userText, maxTokens) {
+/** GET a URL to a file, following redirects, reporting fraction complete. */
+function downloadFile(url, dest, onProgress, redirects = 0) {
+  return new Promise((resolve, reject) => {
+    if (redirects > 6) return reject(new Error('Too many redirects.'));
+    const file = fs.createWriteStream(dest);
+    const req = https.get(url, { headers: { 'User-Agent': 'DailyBible' } }, (res) => {
+      if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
+        res.resume();
+        file.close();
+        fs.unlink(dest, () => {});
+        return downloadFile(res.headers.location, dest, onProgress, redirects + 1).then(resolve, reject);
+      }
+      if (res.statusCode !== 200) {
+        res.resume();
+        file.close();
+        fs.unlink(dest, () => {});
+        return reject(new Error(`Download failed (HTTP ${res.statusCode}).`));
+      }
+      const total = parseInt(res.headers['content-length'] || '0', 10);
+      let done = 0;
+      res.on('data', (c) => {
+        done += c.length;
+        if (total) onProgress(done / total);
+      });
+      res.pipe(file);
+      file.on('finish', () => file.close(() => resolve()));
+      file.on('error', (e) => { fs.unlink(dest, () => {}); reject(e); });
+    });
+    req.on('error', (e) => { file.close(); fs.unlink(dest, () => {}); reject(e); });
+  });
+}
+
+function sleep(ms) { return new Promise((r) => setTimeout(r, ms)); }
+
+async function waitForOllama(timeoutMs) {
+  const end = Date.now() + timeoutMs;
+  while (Date.now() < end) {
+    if ((await ollamaModels()).running) return true;
+    await sleep(2500);
+  }
+  return false;
+}
+
+/** Download and silently install Ollama. Resolves once its local server responds. */
+async function installOllama() {
+  const dest = path.join(app.getPath('temp'), 'OllamaSetup.exe');
+  sendInstallProgress('downloading', 0, 'Downloading Ollama (about 1.5 GB)…');
+  await downloadFile(OLLAMA_INSTALLER_URL, dest, (f) =>
+    sendInstallProgress('downloading', f * 100, `Downloading Ollama… ${Math.round(f * 100)}%`)
+  );
+  sendInstallProgress('installing', 100, 'Installing Ollama…');
+  await new Promise((resolve) => {
+    // Ollama uses an Inno Setup installer (installs per-user, no admin needed).
+    execFile(dest, ['/VERYSILENT', '/NORESTART', '/SUPPRESSMSGBOXES'], { windowsHide: true }, () => resolve());
+  });
+  sendInstallProgress('starting', 100, 'Starting Ollama…');
+  const up = await waitForOllama(120000);
+  fs.unlink(dest, () => {});
+  if (!up) throw new Error("Ollama installed but didn't start. Open it once, then click Re-check.");
+}
+
+/** Pull a model via Ollama's streaming API, reporting download progress. */
+function pullModel(model) {
+  return new Promise((resolve, reject) => {
+    const body = JSON.stringify({ name: model, stream: true });
+    const req = http.request(
+      `${OLLAMA_URL}/api/pull`,
+      { method: 'POST', headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(body) } },
+      (res) => {
+        let buf = '';
+        let failed = null;
+        res.on('data', (chunk) => {
+          buf += chunk.toString();
+          let nl;
+          while ((nl = buf.indexOf('\n')) >= 0) {
+            const line = buf.slice(0, nl).trim();
+            buf = buf.slice(nl + 1);
+            if (!line) continue;
+            try {
+              const j = JSON.parse(line);
+              if (j.error) { failed = j.error; sendInstallProgress('error', 0, j.error); }
+              else if (j.total && j.completed != null) {
+                sendInstallProgress('pulling', (j.completed / j.total) * 100, `Downloading ${model}… ${Math.round((j.completed / j.total) * 100)}%`);
+              } else if (j.status) {
+                sendInstallProgress('pulling', 100, j.status);
+              }
+            } catch { /* ignore partial lines */ }
+          }
+        });
+        res.on('end', () => (failed ? reject(new Error(failed)) : resolve()));
+      }
+    );
+    req.on('error', (e) => reject(e));
+    req.write(body);
+    req.end();
+  });
+}
+
+/** One-click setup: install Ollama if needed, pull the default model, select it. */
+async function autoSetupOllama() {
+  try {
+    let oll = await ollamaModels();
+    if (!oll.running) {
+      await installOllama();
+      oll = await ollamaModels();
+    }
+    const has = (list) => list.some((m) => m === DEFAULT_MODEL || m.startsWith(DEFAULT_MODEL + ':'));
+    if (!has(oll.models)) {
+      sendInstallProgress('pulling', 0, `Downloading ${DEFAULT_MODEL} (about 2 GB)…`);
+      await pullModel(DEFAULT_MODEL);
+      oll = await ollamaModels();
+    }
+    const chosen = oll.models.find((m) => m === DEFAULT_MODEL || m.startsWith(DEFAULT_MODEL + ':')) || DEFAULT_MODEL;
+    db.setMeta('ollama_model', chosen);
+    sendInstallProgress('done', 100, 'Ready.');
+    return { ok: true, model: chosen };
+  } catch (e) {
+    sendInstallProgress('error', 0, (e && e.message) || 'Setup failed.');
+    return { ok: false, error: (e && e.message) || 'Setup failed.' };
+  }
+}
+
+async function callAI(system, userText, maxTokens) {
   const model = db.getMeta('ollama_model');
   if (!model) return { error: 'No local model selected.' };
   try {
@@ -188,29 +300,35 @@ async function callOllama(system, userText, maxTokens) {
   }
 }
 
-async function callAI(system, userText, maxTokens) {
-  return aiProvider() === 'anthropic'
-    ? callClaude(system, userText, maxTokens)
-    : callOllama(system, userText, maxTokens);
+/** Verse text for a range within a chapter, numbered. */
+function passageTextRange(book, chapter, from, to) {
+  const b = bible.books.find((x) => x.name === book);
+  if (!b) return '';
+  const verses = b.chapters[chapter - 1] || [];
+  const out = [];
+  for (let v = from; v <= to; v++) if (verses[v - 1] != null) out.push(`${v} ${verses[v - 1]}`);
+  return out.join(' ');
 }
 
-async function aiExplain(book, chapter) {
+/** Explain one section (verse range) of a chapter. */
+async function aiExplainPassage(book, chapter, from, to, label) {
+  from = parseInt(from, 10);
+  to = parseInt(to, 10);
+  if (!(from >= 1) || !(to >= from)) return { error: 'Passage not found.' };
   const version = currentVersion();
-  const key = `${version}|${book}|${chapter}|explain|${aiProvider()}`;
+  const key = `${version}|${book}|${chapter}|${from}-${to}|explain|ollama`;
   const cached = db.getAiCache(key);
   if (cached) return { text: cached, cached: true };
-  const text = passageText(book, chapter);
+  const text = passageTextRange(book, chapter, from, to);
   if (!text) return { error: 'Passage not found.' };
+  const ref = from === to ? `${book} ${chapter}:${from}` : `${book} ${chapter}:${from}-${to}`;
   const system =
     'You are a concise, accurate Bible study helper for a general reader. Be clear and non-denominational. Do not use markdown headings.';
   const user =
-    `Passage: ${book} ${chapter} (${version})\n\n${text}\n\n` +
-    'In under about 180 words, give:\n' +
-    '1) A 2-3 sentence summary of what happens.\n' +
-    '2) 3-4 short bullet points on key themes or meaning.\n' +
-    '3) One or two sentences of helpful historical or cultural context.\n' +
-    'Use plain text and simple "- " bullets.';
-  const res = await callAI(system, user, 700);
+    `Passage: ${ref}${label ? ` — "${label}"` : ''} (${version})\n\n${text}\n\n` +
+    'In under about 140 words, explain this passage for someone reading it now: ' +
+    'what is happening and what it means. Then add 1-2 short "- " bullets on key themes or helpful context. Use plain text.';
+  const res = await callAI(system, user, 600);
   if (res.text) db.setAiCache(key, res.text);
   return res;
 }
@@ -461,28 +579,16 @@ function registerIpc() {
   ipcMain.handle('bookmark:remove', (_e, ref) => db.removeBookmark(ref));
   ipcMain.handle('bookmark:list', () => db.getBookmarks());
 
-  // ---- AI helper (local Ollama, or Claude API) ----
+  // ---- AI helper (local Ollama only) ----
   ipcMain.handle('ai:status', async () => {
-    const provider = aiProvider();
-    const hasKey = !!db.getMeta('anthropic_key');
     const oll = await ollamaModels();
     const model = db.getMeta('ollama_model') || '';
-    const ready = provider === 'anthropic' ? hasKey : (oll.running && !!model && oll.models.includes(model));
-    return { provider, hasKey, ollama: { running: oll.running, models: oll.models, model }, ready };
-  });
-  ipcMain.handle('ai:setProvider', (_e, provider) => {
-    db.setMeta('ai_provider', provider === 'anthropic' ? 'anthropic' : 'ollama');
-    return { ok: true };
+    const ready = oll.running && !!model && oll.models.includes(model);
+    return { ollama: { running: oll.running, models: oll.models, model }, ready };
   });
   ipcMain.handle('ai:setOllamaModel', (_e, model) => { db.setMeta('ollama_model', String(model || '')); return { ok: true }; });
-  ipcMain.handle('ai:setKey', (_e, key) => {
-    const k = String(key || '').trim();
-    if (!k.startsWith('sk-ant-')) return { ok: false, error: 'That does not look like an Anthropic API key (should start with "sk-ant-").' };
-    db.setMeta('anthropic_key', k);
-    return { ok: true };
-  });
-  ipcMain.handle('ai:clearKey', () => { db.setMeta('anthropic_key', ''); return { ok: true }; });
-  ipcMain.handle('ai:explain', (_e, { book, chapter }) => aiExplain(book, chapter));
+  ipcMain.handle('ai:autoSetup', () => autoSetupOllama());
+  ipcMain.handle('ai:explainPassage', (_e, { book, chapter, from, to, label }) => aiExplainPassage(book, chapter, from, to, label));
   ipcMain.handle('ai:ask', (_e, { book, chapter, question }) => aiAsk(book, chapter, question));
   ipcMain.handle('ai:plan', (_e, prompt) => aiPlan(prompt));
 

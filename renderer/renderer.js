@@ -7,6 +7,7 @@ const FONT_MAX = 30;
 const LS_FONT = 'db_font';
 const LS_LAST = 'db_last';
 const LS_FOCUS = 'db_focus';
+const LS_AIPANEL = 'db_aipanel';
 let scrollRaf = 0;
 
 const state = {
@@ -21,6 +22,8 @@ const state = {
   calMonth: { year: new Date().getFullYear(), month: new Date().getMonth() },
   lastStats: null,
   focus: false,
+  aiReady: false,
+  planSelected: null,   // book name selected in the Plan overview
 };
 
 // ---------- helpers ----------
@@ -62,6 +65,11 @@ async function init() {
   wireControls();
   $('focusToggle').classList.toggle('is-on', state.focus);
 
+  // Study helper panel: open by default (unless the user closed it last time).
+  let aiOpen = true;
+  try { aiOpen = localStorage.getItem(LS_AIPANEL) !== '0'; } catch { /* ignore */ }
+  if (aiOpen) openAiPanel();
+
   state.plan = await svc.getTodayPlan();
 
   // continue where you left off, else today's first plan chapter, else Genesis 1
@@ -78,15 +86,14 @@ async function init() {
   }
 
   renderChapter();
+  populateCatchup();
   renderPlanChips();
   await refreshStats();
   await updateTodayStrip();
-  await setupModal();
 
   svc.onDataChanged(async () => {
     await refreshStats();
     await updateTodayStrip();
-    await refreshModalDone();
     if (!$('view-plan').hidden) await renderPlanView();
   });
   svc.onNavigate((view) => switchView(view));
@@ -149,6 +156,7 @@ function renderChapter() {
         section.className = 'rsection';
         body.appendChild(section);
       }
+      section.dataset.label = chHeadings[verseNo];
       const h = document.createElement('h3');
       h.className = 'section-heading';
       h.textContent = chHeadings[verseNo];
@@ -164,9 +172,17 @@ function renderChapter() {
     num.addEventListener('click', (e) => { e.stopPropagation(); toggleBookmark(verseNo, text); });
     span.appendChild(num);
     span.appendChild(document.createTextNode(text + ' '));
+    if (!section.dataset.from) section.dataset.from = String(verseNo);
+    section.dataset.to = String(verseNo);
     section.appendChild(span);
   });
   document.querySelectorAll('#chapterBody .rsection').forEach((s) => {
+    const explain = document.createElement('button');
+    explain.className = 'rsection-explain';
+    explain.innerHTML = '✦ Explain';
+    explain.title = 'Explain this section with the study helper';
+    explain.addEventListener('click', (e) => { e.stopPropagation(); explainSection(s); });
+    s.appendChild(explain);
     s.addEventListener('click', () => { if (state.focus) setActiveSection(s); });
   });
   document.querySelector('.reader').scrollTop = 0;
@@ -234,54 +250,51 @@ function currentBookName() {
   return state.bible.books[state.bookIdx].name;
 }
 
-function openStudy() {
-  $('aiTitle').textContent = `Study — ${currentBookName()} ${state.chapter}`;
-  $('aiModal').hidden = false;
-  refreshAiView();
+function isAiPanelOpen() { return document.body.classList.contains('ai-open'); }
+function openAiPanel() {
+  document.body.classList.add('ai-open');
+  $('studyBtn').classList.add('is-on');
+  try { localStorage.setItem(LS_AIPANEL, '1'); } catch { /* ignore */ }
+  refreshAiPanel();
 }
-function closeStudy() { $('aiModal').hidden = true; }
+function closeAiPanel() {
+  document.body.classList.remove('ai-open');
+  $('studyBtn').classList.remove('is-on');
+  try { localStorage.setItem(LS_AIPANEL, '0'); } catch { /* ignore */ }
+}
+function toggleAiPanel() { isAiPanelOpen() ? closeAiPanel() : openAiPanel(); }
 
-async function refreshAiView() {
+async function refreshAiPanel() {
   const st = await svc.aiStatus();
-  if (st.ready) {
-    $('aiSetup').hidden = true;
-    $('aiMain').hidden = false;
-    $('aiBody').innerHTML = '';
-    loadExplanation();
-  } else {
-    $('aiMain').hidden = true;
-    showSetup(st);
-  }
+  state.aiReady = !!st.ready;
+  $('aiSetup').hidden = st.ready;
+  $('aiMain').hidden = !st.ready;
+  if (!st.ready) showSetup(st);
 }
 
 function showSetup(st) {
   $('aiSetup').hidden = false;
-  const prov = st.provider || 'ollama';
-  document.querySelectorAll('.ai-prov').forEach((b) => b.classList.toggle('is-on', b.dataset.prov === prov));
-  $('aiOllamaSetup').hidden = prov !== 'ollama';
-  $('aiAnthropicSetup').hidden = prov !== 'anthropic';
-  if (prov === 'ollama') renderOllamaPanel(st.ollama);
-}
-
-async function selectProvider(prov) {
-  await svc.aiSetProvider(prov);
-  showSetup(await svc.aiStatus());
+  renderOllamaPanel(st.ollama);
 }
 
 function renderOllamaPanel(oll) {
   const running = !!(oll && oll.running);
-  $('aiOllamaRunning').hidden = !running;
+  const hasModels = running && oll.models.length > 0;
+  $('aiOllamaRunning').hidden = !hasModels;
   $('aiOllamaMissing').hidden = running;
-  if (!running) return;
-  const sel = $('aiOllamaModel');
-  sel.innerHTML = '';
-  if (!oll.models.length) {
-    const o = document.createElement('option');
-    o.value = '';
-    o.textContent = 'No models installed yet';
-    sel.appendChild(o);
-    $('aiOllamaMsg').textContent = 'Pull a model first, e.g. "ollama pull llama3.2".';
+
+  const installBtn = $('aiOllamaInstall');
+  if (!running) {
+    installBtn.hidden = false;
+    installBtn.textContent = 'Install automatically';
+  } else if (!hasModels) {
+    installBtn.hidden = false;
+    installBtn.textContent = 'Download model (llama3.2)';
+    $('aiOllamaMsg').textContent = '';
   } else {
+    installBtn.hidden = true;
+    const sel = $('aiOllamaModel');
+    sel.innerHTML = '';
     oll.models.forEach((m) => {
       const o = document.createElement('option');
       o.value = m;
@@ -297,14 +310,37 @@ async function recheckOllama() {
   renderOllamaPanel((await svc.aiStatus()).ollama);
 }
 
+function setInstallUi(s) {
+  const box = $('aiInstallBox');
+  if (box.hidden) box.hidden = false;
+  $('aiInstallBar').style.width = (s.percent || 0) + '%';
+  $('aiInstallMsg').textContent = s.message || '';
+  $('aiInstallBar').classList.toggle('is-error', s.phase === 'error');
+}
+
+async function autoInstallOllama() {
+  const btn = $('aiOllamaInstall');
+  btn.disabled = true;
+  $('aiInstallBox').hidden = false;
+  setInstallUi({ percent: 3, message: 'Starting…' });
+  const res = await svc.aiAutoSetup();
+  btn.disabled = false;
+  if (res && res.ok) {
+    $('aiInstallBox').hidden = true;
+    refreshAiPanel();
+  }
+  // On failure the progress message already shows the error.
+}
+
 async function saveOllamaModel() {
   const model = $('aiOllamaModel').value;
   if (!model) { $('aiOllamaMsg').textContent = 'Pull a model first, then re-check.'; return; }
   await svc.aiSetOllamaModel(model);
-  refreshAiView();
+  refreshAiPanel();
 }
 
 async function openAiSettings() {
+  state.aiReady = false;
   $('aiMain').hidden = true;
   showSetup(await svc.aiStatus());
 }
@@ -323,19 +359,54 @@ function aiCard(label, text) {
   return { el, setText: (t) => { body.textContent = t; } };
 }
 
-async function loadExplanation() {
+function hidePanelEmpty() {
+  const e = $('aiPanelEmpty');
+  if (e) e.remove();
+}
+
+async function ensureAiReady() {
+  if (!isAiPanelOpen()) openAiPanel();
+  if (state.aiReady) return true;
+  await refreshAiPanel();
+  if (!state.aiReady) {
+    toast('Set up the study helper first (right panel)');
+    return false;
+  }
+  return true;
+}
+
+// Explain one section/paragraph in the right-hand panel.
+async function explainSection(sectionEl) {
+  const from = parseInt(sectionEl.dataset.from, 10);
+  const to = parseInt(sectionEl.dataset.to, 10);
+  if (!from) return;
+  if (!(await ensureAiReady())) return;
+
   const book = currentBookName();
   const chapter = state.chapter;
-  const card = aiCard('Explanation', 'Thinking…');
+  const label = sectionEl.dataset.label || '';
+  const ref = from === to ? `${book} ${chapter}:${from}` : `${book} ${chapter}:${from}–${to}`;
+
+  // Briefly flag which section is being explained.
+  document.querySelectorAll('#chapterBody .rsection.explaining').forEach((s) => s.classList.remove('explaining'));
+  sectionEl.classList.add('explaining');
+
+  hidePanelEmpty();
+  const card = aiCard(label ? `${label} · ${ref}` : ref, 'Thinking…');
+  card.el.classList.add('ai-explain');
   $('aiBody').appendChild(card.el);
-  const res = await svc.aiExplain({ book, chapter });
+  card.el.scrollIntoView({ block: 'end' });
+  const res = await svc.aiExplainPassage({ book, chapter, from, to, label });
   card.setText(res.error ? '⚠ ' + res.error : res.text);
+  card.el.scrollIntoView({ block: 'end' });
 }
 
 async function askQuestion() {
   const q = $('aiQuestion').value.trim();
   if (!q) return;
+  if (!(await ensureAiReady())) return;
   $('aiQuestion').value = '';
+  hidePanelEmpty();
   const book = currentBookName();
   const chapter = state.chapter;
   const qCard = aiCard('You asked', q);
@@ -347,16 +418,6 @@ async function askQuestion() {
   const res = await svc.aiAsk({ book, chapter, question: q });
   aCard.setText(res.error ? '⚠ ' + res.error : res.text);
   aCard.el.scrollIntoView({ block: 'end' });
-}
-
-async function saveAiKey() {
-  const key = $('aiKeyInput').value.trim();
-  $('aiSetupMsg').textContent = '';
-  const res = await svc.aiSetKey(key);
-  if (!res.ok) { $('aiSetupMsg').textContent = res.error || 'Could not save key.'; return; }
-  await svc.aiSetProvider('anthropic');
-  $('aiKeyInput').value = '';
-  refreshAiView();
 }
 
 function goToChapter(bookIdx, chapter) {
@@ -549,7 +610,6 @@ async function markChapterRead() {
   await svc.logSession({ date: state.plan.date, chapters: [ref], seconds: 0 });
   await refreshStats();
   await updateTodayStrip();
-  await refreshModalDone();
   toast(`Marked ${ref} as read`);
 }
 
@@ -557,7 +617,6 @@ async function markComplete() {
   await svc.markTodayComplete();
   await refreshStats();
   await updateTodayStrip();
-  await refreshModalDone();
   toast("Today marked complete ✓");
 }
 
@@ -592,54 +651,60 @@ async function reloadPlanAndStats() {
   renderPlanChips();
   await refreshStats();
   await updateTodayStrip();
-  await refreshModalDone();
   if (!$('view-plan').hidden) await renderPlanView();
 }
 
 // ---------- plan builder ----------
 const planEditor = { order: [], pace: 3 };
-const planExpanded = new Set(); // book names currently expanded in the Plan view
 
 function chapterCountOf(name) {
   const i = state.bookIndex.get(name);
   return i == null ? 0 : state.bible.books[i].chapters.length;
 }
 
+// The book picker groups by Testament — Old Testament first, then New Testament.
+function planGroups() {
+  return [
+    { name: 'Old Testament', start: 0, end: OT_BOOKS },
+    { name: 'New Testament', start: OT_BOOKS, end: state.bible.books.length },
+  ];
+}
+const planCollapsedGroups = new Set(); // section names collapsed in the builder
+
+function groupBookNames(g) {
+  return state.bible.books.slice(g.start, g.end).map((b) => b.name);
+}
+
 function presetOrder(key) {
   const names = state.bible.books.map((b) => b.name);
   switch (key) {
+    case 'whole': return names.slice();
     case 'nt': return names.slice(OT_BOOKS);
     case 'ot': return names.slice(0, OT_BOOKS);
     case 'gospels': return names.slice(OT_BOOKS, OT_BOOKS + 4);
     case 'torah': return names.slice(0, 5);
     case 'wisdom': return ['Psalms', 'Proverbs'].filter((n) => state.bookIndex.has(n));
+    case 'clear': return [];
     default: return [];
   }
 }
 
-function populatePlanBookSelect() {
-  const sel = $('planBookSelect');
-  sel.innerHTML = '';
-  const ot = document.createElement('optgroup');
-  ot.label = 'Old Testament';
-  const nt = document.createElement('optgroup');
-  nt.label = 'New Testament';
-  state.bible.books.forEach((b, i) => {
-    const opt = document.createElement('option');
-    opt.value = b.name;
-    opt.textContent = b.name;
-    (i < OT_BOOKS ? ot : nt).appendChild(opt);
+function syncGroupCollapse() {
+  // Expand sections that hold selected books; collapse the rest.
+  planCollapsedGroups.clear();
+  planGroups().forEach((g) => {
+    const hasSel = groupBookNames(g).some((n) => planEditor.order.includes(n));
+    if (!hasSel) planCollapsedGroups.add(g.name);
   });
-  sel.appendChild(ot);
-  sel.appendChild(nt);
 }
 
 function openPlanBuilder() {
   const cfg = state.plan && state.plan.config;
   planEditor.order = cfg && cfg.order ? [...cfg.order] : [];
   planEditor.pace = cfg && cfg.pace ? cfg.pace : 3;
-  populatePlanBookSelect();
+  syncGroupCollapse();
   $('planPaceSelect').value = String(planEditor.pace);
+  $('planOrderWrap').open = false;
   renderPlanEditor();
   $('planModal').hidden = false;
 }
@@ -647,6 +712,66 @@ function openPlanBuilder() {
 function closePlanBuilder() { $('planModal').hidden = true; }
 
 function renderPlanEditor() {
+  renderPlanGroups();
+  renderPlanOrder();
+  updatePlanSummary();
+}
+
+function renderPlanGroups() {
+  const wrap = $('planGroups');
+  wrap.innerHTML = '';
+  const selected = new Set(planEditor.order);
+  planGroups().forEach((g) => {
+    const names = groupBookNames(g);
+    if (!names.length) return;
+    const selCount = names.filter((n) => selected.has(n)).length;
+    const allOn = selCount === names.length;
+    const collapsed = planCollapsedGroups.has(g.name);
+
+    const sec = document.createElement('div');
+    sec.className = 'pg' + (collapsed ? '' : ' open') + (selCount ? ' has-sel' : '');
+
+    const head = document.createElement('div');
+    head.className = 'pg-head';
+    head.innerHTML =
+      `<span class="pg-chevron">${collapsed ? '▸' : '▾'}</span>` +
+      `<span class="pg-name">${escapeHtml(g.name)}</span>` +
+      `<span class="pg-count">${selCount ? selCount + ' / ' + names.length : names.length + ' book' + (names.length === 1 ? '' : 's')}</span>`;
+    const allBtn = document.createElement('button');
+    allBtn.className = 'pg-all';
+    allBtn.textContent = allOn ? 'Remove all' : 'Add all';
+    allBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      if (allOn) names.forEach(removeBookByName);
+      else names.forEach(addBookCanonical);
+      renderPlanEditor();
+    });
+    head.appendChild(allBtn);
+    head.addEventListener('click', () => {
+      if (planCollapsedGroups.has(g.name)) planCollapsedGroups.delete(g.name);
+      else planCollapsedGroups.add(g.name);
+      renderPlanGroups();
+    });
+    sec.appendChild(head);
+
+    const grid = document.createElement('div');
+    grid.className = 'pg-grid';
+    grid.hidden = collapsed;
+    names.forEach((name) => {
+      const chip = document.createElement('button');
+      chip.className = 'bchip' + (selected.has(name) ? ' is-on' : '');
+      chip.innerHTML = `<span class="bchip-name">${escapeHtml(name)}</span><span class="bchip-n">${chapterCountOf(name)}</span>`;
+      chip.addEventListener('click', () => toggleBook(name));
+      grid.appendChild(chip);
+    });
+    sec.appendChild(grid);
+    wrap.appendChild(sec);
+  });
+  const count = planEditor.order.length;
+  $('planPickCount').textContent = count ? `(${count} book${count === 1 ? '' : 's'} selected)` : '';
+}
+
+function renderPlanOrder() {
   const wrap = $('planOrder');
   wrap.innerHTML = '';
   planEditor.order.forEach((name, idx) => {
@@ -664,9 +789,8 @@ function renderPlanEditor() {
     row.appendChild(btns);
     wrap.appendChild(row);
   });
-  $('planOrderEmpty').hidden = planEditor.order.length > 0;
-  $('planOrderCount').textContent = planEditor.order.length ? `(${planEditor.order.length} books)` : '';
-  updatePlanSummary();
+  $('planOrderWrap').hidden = planEditor.order.length === 0;
+  $('planOrderCount').textContent = planEditor.order.length ? `(${planEditor.order.length})` : '';
 }
 
 function iconBtn(label, title, disabled, onClick, extra = '') {
@@ -681,17 +805,39 @@ function iconBtn(label, title, disabled, onClick, extra = '') {
 
 function updatePlanSummary() {
   const total = planEditor.order.reduce((n, name) => n + chapterCountOf(name), 0);
-  if (!total) { $('planSummary').textContent = 'No books selected yet'; return; }
+  const save = $('planSave');
+  if (!total) {
+    $('planSummary').textContent = 'No books selected yet';
+    if (save) save.disabled = true;
+    return;
+  }
+  if (save) save.disabled = false;
   const pace = planEditor.pace;
   const days = Math.max(1, Math.ceil(total / pace));
-  $('planSummary').textContent = `${total} chapters · ${days} day${days === 1 ? '' : 's'} at ${pace}/day`;
+  const weeks = Math.round(days / 7);
+  const dur = days >= 14 ? ` · about ${weeks} week${weeks === 1 ? '' : 's'}` : '';
+  const books = planEditor.order.length;
+  $('planSummary').textContent =
+    `${books} book${books === 1 ? '' : 's'} · ${total} chapters · ${days} day${days === 1 ? '' : 's'} at ${pace}/day${dur}`;
 }
 
-function addPlanBook() {
-  const name = $('planBookSelect').value;
-  if (!name) return;
-  if (planEditor.order.includes(name)) { toast(`${name} is already in your plan`); return; }
-  planEditor.order.push(name);
+function addBookCanonical(name) {
+  if (planEditor.order.includes(name)) return;
+  const bi = state.bookIndex.get(name);
+  const arr = planEditor.order;
+  let pos = arr.length;
+  for (let i = 0; i < arr.length; i++) {
+    if (state.bookIndex.get(arr[i]) > bi) { pos = i; break; }
+  }
+  arr.splice(pos, 0, name);
+}
+function removeBookByName(name) {
+  const i = planEditor.order.indexOf(name);
+  if (i >= 0) planEditor.order.splice(i, 1);
+}
+function toggleBook(name) {
+  if (planEditor.order.includes(name)) removeBookByName(name);
+  else addBookCanonical(name);
   renderPlanEditor();
 }
 function movePlanBook(idx, dir) {
@@ -707,6 +853,7 @@ function removePlanBook(idx) {
 }
 function applyPreset(key) {
   planEditor.order = presetOrder(key);
+  syncGroupCollapse();
   renderPlanEditor();
 }
 
@@ -717,14 +864,15 @@ async function generateAiPlan() {
   msg.textContent = 'Generating…';
   const res = await svc.aiPlan(prompt);
   if (res.error) {
-    msg.textContent = /No API key|local model|Ollama/i.test(res.error)
-      ? res.error + ' Set up the AI helper in Study (open it on any chapter).'
+    msg.textContent = /local model|Ollama/i.test(res.error)
+      ? res.error + ' Set up the study helper first (✦ Helper on any chapter).'
       : res.error;
     return;
   }
   planEditor.order = res.order;
   planEditor.pace = res.pace;
   $('planPaceSelect').value = String(res.pace);
+  syncGroupCollapse();
   renderPlanEditor();
   const chapters = res.order.reduce((n, name) => n + chapterCountOf(name), 0);
   const days = Math.max(1, Math.ceil(chapters / res.pace));
@@ -754,6 +902,58 @@ function jumpToPlanStart() {
   }
 }
 
+// ---------- catch up: mark already-read chapters, resume at the next one ----------
+function populateCatchup() {
+  const bsel = $('catchupBook');
+  bsel.innerHTML = '';
+  const ot = document.createElement('optgroup'); ot.label = 'Old Testament';
+  const nt = document.createElement('optgroup'); nt.label = 'New Testament';
+  state.bible.books.forEach((b, i) => {
+    const opt = document.createElement('option');
+    opt.value = i;
+    opt.textContent = b.name;
+    (i < OT_BOOKS ? ot : nt).appendChild(opt);
+  });
+  bsel.appendChild(ot);
+  bsel.appendChild(nt);
+  bsel.value = String(state.bookIdx);
+  populateCatchupChapters();
+}
+
+function populateCatchupChapters() {
+  const bi = parseInt($('catchupBook').value, 10);
+  const csel = $('catchupChapter');
+  csel.innerHTML = '';
+  const n = state.bible.books[bi].chapters.length;
+  for (let c = 1; c <= n; c++) {
+    const o = document.createElement('option');
+    o.value = c;
+    o.textContent = c;
+    csel.appendChild(o);
+  }
+  csel.value = String(Math.min(state.chapter || 1, n));
+}
+
+async function applyCatchup() {
+  const bi = parseInt($('catchupBook').value, 10);
+  const upTo = parseInt($('catchupChapter').value, 10);
+  if (!(upTo >= 1)) return;
+  const name = state.bible.books[bi].name;
+  const labels = [];
+  for (let c = 1; c <= upTo; c++) labels.push(`${name} ${c}`);
+  await svc.markChaptersRead(labels);
+  await refreshStats();
+  await updateTodayStrip();
+  if (!$('view-plan').hidden) await renderPlanView();
+
+  const total = state.bible.books[bi].chapters.length;
+  if (upTo < total) goToChapter(bi, upTo + 1);
+  else if (bi + 1 < state.bible.books.length) goToChapter(bi + 1, 1);
+  else goToChapter(bi, total);
+  switchView('read');
+  toast(`Marked ${name} 1–${upTo} as read — resuming at ${currentBookName()} ${state.chapter}`);
+}
+
 // ---------- plan view (books + per-book progress) ----------
 function planBookOrder() {
   const cfg = state.plan && state.plan.config;
@@ -778,74 +978,133 @@ async function renderPlanView() {
   $('planViewSub').textContent =
     `${isCustom ? 'Custom plan' : 'Whole Bible'} · ${order.length} books · ${read} / ${total} chapters read · ${pctAll}%`;
 
+  // Split by Testament — Old Testament first, then New Testament.
+  const inNT = (name) => { const i = state.bookIndex.get(name); return i != null && i >= OT_BOOKS; };
+  const groups = [
+    { name: 'Old Testament', books: order.filter((n) => !inNT(n)) },
+    { name: 'New Testament', books: order.filter(inNT) },
+  ].filter((g) => g.books.length);
+
+  if (state.planSelected && !order.includes(state.planSelected)) state.planSelected = null;
+
   const wrap = $('planBooks');
   wrap.innerHTML = '';
-  order.forEach((name) => {
-    const idx = state.bookIndex.get(name);
-    if (idx == null) return;
-    const n = state.bible.books[idx].chapters.length;
-    let rc = 0;
-    for (let c = 1; c <= n; c++) if (readSet.has(`${name} ${c}`)) rc++;
-    const pct = Math.round((rc / n) * 100);
-    const complete = rc === n;
-
-    const card = document.createElement('div');
-    card.className = 'book-card' + (complete ? ' complete' : '');
-
-    const expanded = planExpanded.has(name);
-
-    const head = document.createElement('div');
-    head.className = 'book-card-head';
-    head.innerHTML =
-      `<div class="book-title-wrap"><span class="book-chevron">${expanded ? '▾' : '▸'}</span>` +
-      `<span class="book-name">${escapeHtml(name)}</span>` +
-      `<span class="book-progress-text">${rc} / ${n} chapters${complete ? ' ✓' : ''}</span></div>`;
-    const btn = document.createElement('button');
-    btn.className = 'btn btn-sm' + (complete ? '' : ' btn-success');
-    btn.textContent = complete ? 'Clear' : 'Mark complete';
-    btn.addEventListener('click', async (e) => {
-      e.stopPropagation();
-      const labels = [];
-      for (let c = 1; c <= n; c++) labels.push(`${name} ${c}`);
-      if (complete) await svc.unmarkChapters(labels);
-      else await svc.markChaptersRead(labels);
-      await renderPlanView();
-      await refreshStats();
-      await updateTodayStrip();
-      toast(complete ? `Cleared ${name}` : `Marked ${name} complete`);
+  groups.forEach((g) => {
+    let gTotal = 0;
+    let gRead = 0;
+    g.books.forEach((name) => {
+      const n = state.bible.books[state.bookIndex.get(name)].chapters.length;
+      gTotal += n;
+      for (let c = 1; c <= n; c++) if (readSet.has(`${name} ${c}`)) gRead++;
     });
-    head.appendChild(btn);
-    card.appendChild(head);
+    const gComplete = gRead === gTotal;
 
-    const bar = document.createElement('div');
-    bar.className = 'book-bar';
-    bar.innerHTML = `<div class="book-bar-fill" style="width:${pct}%"></div>`;
-    card.appendChild(bar);
+    const sec = document.createElement('section');
+    sec.className = 'plan-section';
+    const sh = document.createElement('div');
+    sh.className = 'plan-section-head static';
+    sh.innerHTML =
+      `<span class="ps-name">${escapeHtml(g.name)}</span>` +
+      `<span class="ps-count">${g.books.length} book${g.books.length === 1 ? '' : 's'} · ${gRead} / ${gTotal}${gComplete ? ' ✓' : ''}</span>`;
+    sec.appendChild(sh);
 
-    const dots = document.createElement('div');
-    dots.className = 'chapter-dots';
-    dots.hidden = !expanded;
-    for (let c = 1; c <= n; c++) {
-      const dot = document.createElement('button');
-      dot.className = 'cdot' + (readSet.has(`${name} ${c}`) ? ' done' : '');
-      dot.textContent = c;
-      dot.title = `Open ${name} ${c}`;
-      dot.addEventListener('click', () => openReference(name, c));
-      dots.appendChild(dot);
-    }
-    card.appendChild(dots);
-
-    head.addEventListener('click', () => {
-      const nowOn = !planExpanded.has(name);
-      if (nowOn) planExpanded.add(name);
-      else planExpanded.delete(name);
-      dots.hidden = !nowOn;
-      const chev = head.querySelector('.book-chevron');
-      if (chev) chev.textContent = nowOn ? '▾' : '▸';
-    });
-
-    wrap.appendChild(card);
+    const grid = document.createElement('div');
+    grid.className = 'book-tiles';
+    g.books.forEach((name) => grid.appendChild(buildBookTile(name, readSet)));
+    sec.appendChild(grid);
+    wrap.appendChild(sec);
   });
+
+  renderPlanDetail(readSet);
+}
+
+// A compact tile in the overview grid.
+function buildBookTile(name, readSet) {
+  const idx = state.bookIndex.get(name);
+  const n = state.bible.books[idx].chapters.length;
+  let rc = 0;
+  for (let c = 1; c <= n; c++) if (readSet.has(`${name} ${c}`)) rc++;
+  const pct = Math.round((rc / n) * 100);
+  const complete = rc === n;
+  const started = rc > 0 && !complete;
+
+  const tile = document.createElement('button');
+  tile.className = 'book-tile' +
+    (complete ? ' complete' : started ? ' started' : '') +
+    (state.planSelected === name ? ' selected' : '');
+  tile.innerHTML =
+    `<span class="bt-name">${escapeHtml(name)}</span>` +
+    `<span class="bt-meta">${complete ? '✓ done' : rc + ' / ' + n}</span>` +
+    `<span class="bt-bar"><span class="bt-bar-fill" style="width:${pct}%"></span></span>`;
+  tile.addEventListener('click', () => {
+    state.planSelected = name;
+    renderPlanView();
+    const d = $('planDetail');
+    if (d) d.scrollIntoView({ block: 'nearest' });
+  });
+  return tile;
+}
+
+// The detail panel for the selected book: chapters + actions.
+function renderPlanDetail(readSet) {
+  const el = $('planDetail');
+  el.innerHTML = '';
+  const name = state.planSelected;
+  if (!name) { el.hidden = true; return; }
+  el.hidden = false;
+
+  const idx = state.bookIndex.get(name);
+  const n = state.bible.books[idx].chapters.length;
+  let rc = 0;
+  for (let c = 1; c <= n; c++) if (readSet.has(`${name} ${c}`)) rc++;
+  const pct = Math.round((rc / n) * 100);
+  const complete = rc === n;
+
+  const head = document.createElement('div');
+  head.className = 'plan-detail-head';
+  head.innerHTML =
+    `<div><span class="pd-name">${escapeHtml(name)}</span>` +
+    `<span class="pd-meta">${rc} / ${n} chapters read · ${pct}%</span></div>`;
+  const actions = document.createElement('div');
+  actions.className = 'pd-actions';
+  const openBtn = document.createElement('button');
+  openBtn.className = 'btn btn-sm';
+  openBtn.textContent = 'Open in reader';
+  openBtn.addEventListener('click', () => openReference(name, 1));
+  const markBtn = document.createElement('button');
+  markBtn.className = 'btn btn-sm' + (complete ? '' : ' btn-success');
+  markBtn.textContent = complete ? 'Clear book' : 'Mark book complete';
+  markBtn.addEventListener('click', async () => {
+    const labels = [];
+    for (let c = 1; c <= n; c++) labels.push(`${name} ${c}`);
+    if (complete) await svc.unmarkChapters(labels);
+    else await svc.markChaptersRead(labels);
+    await renderPlanView();
+    await refreshStats();
+    await updateTodayStrip();
+    toast(complete ? `Cleared ${name}` : `Marked ${name} complete`);
+  });
+  actions.appendChild(openBtn);
+  actions.appendChild(markBtn);
+  head.appendChild(actions);
+  el.appendChild(head);
+
+  const bar = document.createElement('div');
+  bar.className = 'book-bar';
+  bar.innerHTML = `<div class="book-bar-fill" style="width:${pct}%"></div>`;
+  el.appendChild(bar);
+
+  const dots = document.createElement('div');
+  dots.className = 'chapter-dots';
+  for (let c = 1; c <= n; c++) {
+    const dot = document.createElement('button');
+    dot.className = 'cdot' + (readSet.has(`${name} ${c}`) ? ' done' : '');
+    dot.textContent = c;
+    dot.title = `Open ${name} ${c}`;
+    dot.addEventListener('click', () => openReference(name, c));
+    dots.appendChild(dot);
+  }
+  el.appendChild(dots);
 }
 
 // Reusable "Are you sure?" dialog. Resolves true/false.
@@ -965,41 +1224,6 @@ function shiftMonth(delta) {
 }
 
 // ---------- modal ----------
-async function setupModal() {
-  const d = parseISO(state.plan.date);
-  $('modalDate').textContent = d.toLocaleDateString(undefined, { weekday: 'long', month: 'long', day: 'numeric' });
-  $('modalSub').textContent = `Day ${state.plan.day} · ${state.plan.chapters.length} chapters`;
-
-  const wrap = $('modalChapters');
-  wrap.innerHTML = '';
-  state.plan.chapters.forEach((c) => {
-    const el = document.createElement('button');
-    el.className = 'modal-chapter';
-    el.textContent = `${c.book} ${c.chapter}`;
-    el.addEventListener('click', () => {
-      if (state.bookIndex.has(c.book)) goToChapter(state.bookIndex.get(c.book), c.chapter);
-      hideModal();
-    });
-    wrap.appendChild(el);
-  });
-
-  $('startReadingBtn').addEventListener('click', () => {
-    const first = state.plan.chapters[0];
-    if (first && state.bookIndex.has(first.book)) goToChapter(state.bookIndex.get(first.book), first.chapter);
-    hideModal();
-  });
-  $('browseBtn').addEventListener('click', hideModal);
-
-  await refreshModalDone();
-  $('modal').hidden = false;
-}
-async function refreshModalDone() {
-  const status = await svc.getTodayStatus();
-  $('modalDone').hidden = !status.complete;
-  $('startReadingBtn').textContent = status.complete ? 'Read again' : 'Start Reading';
-}
-function hideModal() { $('modal').hidden = true; }
-
 // ---------- views ----------
 function switchView(view) {
   document.querySelectorAll('.tab').forEach((t) => t.classList.toggle('is-active', t.dataset.view === view));
@@ -1023,16 +1247,15 @@ function wireControls() {
   $('fontUp').addEventListener('click', () => setFont(1.5));
   $('focusToggle').addEventListener('click', toggleFocus);
   $('versionSelect').addEventListener('change', (e) => changeVersion(e.target.value));
-  $('studyBtn').addEventListener('click', openStudy);
-  $('aiClose').addEventListener('click', closeStudy);
-  $('aiSaveKey').addEventListener('click', saveAiKey);
+  $('studyBtn').addEventListener('click', toggleAiPanel);
+  $('aiPanelClose').addEventListener('click', closeAiPanel);
   $('aiForget').addEventListener('click', openAiSettings);
   $('aiSend').addEventListener('click', askQuestion);
   $('aiQuestion').addEventListener('keydown', (e) => { if (e.key === 'Enter') askQuestion(); });
-  $('aiKeyInput').addEventListener('keydown', (e) => { if (e.key === 'Enter') saveAiKey(); });
-  document.querySelectorAll('.ai-prov').forEach((b) => b.addEventListener('click', () => selectProvider(b.dataset.prov)));
   $('aiOllamaSave').addEventListener('click', saveOllamaModel);
   $('aiOllamaRecheck').addEventListener('click', recheckOllama);
+  $('aiOllamaInstall').addEventListener('click', autoInstallOllama);
+  svc.onAiInstallProgress((s) => setInstallUi(s));
   document.querySelector('.reader').addEventListener('scroll', () => {
     if (!state.focus || scrollRaf) return;
     scrollRaf = requestAnimationFrame(() => { scrollRaf = 0; updateActiveSection(); });
@@ -1044,13 +1267,14 @@ function wireControls() {
   $('editPlanBtn').addEventListener('click', openPlanBuilder);
   $('editPlanBtn2').addEventListener('click', openPlanBuilder);
   $('planClose').addEventListener('click', closePlanBuilder);
-  $('planAddBtn').addEventListener('click', addPlanBook);
   $('planUseDefault').addEventListener('click', useDefaultPlan);
   $('planSave').addEventListener('click', savePlan);
-  $('aiPlanBtn').addEventListener('click', generateAiPlan);
-  $('aiPlanPrompt').addEventListener('keydown', (e) => { if (e.key === 'Enter') generateAiPlan(); });
   $('planPaceSelect').addEventListener('change', (e) => { planEditor.pace = parseInt(e.target.value, 10) || 3; updatePlanSummary(); });
   document.querySelectorAll('.preset').forEach((b) => b.addEventListener('click', () => applyPreset(b.dataset.preset)));
+  $('aiPlanBtn').addEventListener('click', generateAiPlan);
+  $('aiPlanPrompt').addEventListener('keydown', (e) => { if (e.key === 'Enter') generateAiPlan(); });
+  $('catchupBook').addEventListener('change', populateCatchupChapters);
+  $('catchupBtn').addEventListener('click', applyCatchup);
   $('calPrev').addEventListener('click', () => shiftMonth(-1));
   $('calNext').addEventListener('click', () => shiftMonth(1));
   $('searchBtn').addEventListener('click', runSearch);
@@ -1059,7 +1283,7 @@ function wireControls() {
   document.querySelectorAll('.tab').forEach((t) => t.addEventListener('click', () => switchView(t.dataset.view)));
 
   document.addEventListener('keydown', (e) => {
-    if (!$('modal').hidden || !$('confirmModal').hidden || !$('planModal').hidden || !$('aiModal').hidden) return;
+    if (!$('confirmModal').hidden || !$('planModal').hidden) return;
     if (['INPUT', 'SELECT', 'TEXTAREA'].includes(e.target.tagName)) return;
     if (!$('view-read').hidden) {
       if (e.key === 'ArrowLeft') stepChapter(-1);

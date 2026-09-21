@@ -20,13 +20,13 @@ redistributed.
   left/right arrow keys.
 - Focus mode: highlights the section you are reading and dims the rest, following
   your scroll, so it is easy to keep your place.
-- Optional AI study helper: explains the chapter, answers questions, and can build
-  a reading plan from a plain-language description. Two providers to choose from:
-  - Local (free): a small open-source model via [Ollama](https://ollama.com) —
-    no key, offline, runs on your machine (install Ollama and `ollama pull llama3.2`).
-  - Claude: `claude-haiku-4-5` via the Anthropic API — higher quality, needs your
-    own API key (stored locally), small per-use cost.
-  Explanations are cached per chapter so repeat views are instant.
+- Optional AI study helper in a side panel next to the passage: every section has an
+  "Explain" button that breaks down that specific passage in the panel, and you can
+  ask free-form questions about the chapter. It runs entirely on your own machine
+  through a small open-source model via [Ollama](https://ollama.com) — free, offline,
+  and no API key. The app can download and set it up for you in one click (a one-time
+  ~3.5 GB download), or you can install Ollama yourself and run `ollama pull llama3.2`.
+  Explanations are cached per passage so repeat views are instant.
 - Section headings above each passage (for example "The Genealogy of Jesus" or
   "Jesus Calms the Storm"). The WEB ships none, so these are the public-domain
   Berean Standard Bible headings, matched to each verse (`assets/headings.json`).
@@ -37,12 +37,19 @@ redistributed.
 
 ### Plans and tracking
 
-- Custom reading plans: build your own book-by-book plan (presets for New
-  Testament, Gospels, Old Testament, Torah, and Psalms and Proverbs, or pick and
-  reorder any books) and choose a pace in chapters per day. Falls back to the
-  whole Bible in a year if you do not build one.
-- Plan tab: every book in your plan as a collapsible row with a progress bar, a
-  clickable chapter grid, per-book "mark complete", and an overall total.
+- Custom reading plans: either describe what you want and let AI build it (for
+  example "the New Testament in 60 days"), or use the visual book picker — tap books
+  to include them, grouped into collapsible Old Testament / New Testament sections,
+  with one-tap presets (Whole Bible, New Testament, Gospels, Old Testament, Torah,
+  Psalms & Proverbs) and a live "books · chapters · days" estimate. Choose a pace in
+  chapters per day; optionally reorder the books. Falls back to the whole Bible in a
+  year if you do not build one.
+- Catch up: from Progress, pick a book and chapter under "Already read up to" to mark
+  everything up to there as read and jump the reader to the next chapter.
+- Plan tab: every book in your plan shown at once as a compact grid of tiles (Old
+  Testament, then New Testament), each with its own progress bar. Click a book to open
+  a detail panel with its chapter grid, an "open in reader" button, and "mark book
+  complete".
 - Mark a single chapter read, or mark the whole day complete, from the reader or
   the tray.
 - Streaks (current and longest), days completed, and chapters read.

@@ -27,17 +27,16 @@ contextBridge.exposeInMainWorld('api', {
   removeBookmark: (ref) => ipcRenderer.invoke('bookmark:remove', ref),
   getBookmarks: () => ipcRenderer.invoke('bookmark:list'),
 
-  // AI helper
+  // AI helper (local Ollama only)
   aiStatus: () => ipcRenderer.invoke('ai:status'),
-  aiSetProvider: (provider) => ipcRenderer.invoke('ai:setProvider', provider),
   aiSetOllamaModel: (model) => ipcRenderer.invoke('ai:setOllamaModel', model),
-  aiSetKey: (key) => ipcRenderer.invoke('ai:setKey', key),
-  aiClearKey: () => ipcRenderer.invoke('ai:clearKey'),
-  aiExplain: (payload) => ipcRenderer.invoke('ai:explain', payload),
+  aiAutoSetup: () => ipcRenderer.invoke('ai:autoSetup'),
+  aiExplainPassage: (payload) => ipcRenderer.invoke('ai:explainPassage', payload),
   aiAsk: (payload) => ipcRenderer.invoke('ai:ask', payload),
   aiPlan: (prompt) => ipcRenderer.invoke('ai:plan', prompt),
 
   // events pushed from the main process (tray menu, etc.)
   onNavigate: (cb) => ipcRenderer.on('navigate', (_e, view) => cb(view)),
   onDataChanged: (cb) => ipcRenderer.on('data:changed', () => cb()),
+  onAiInstallProgress: (cb) => ipcRenderer.on('ai:install-progress', (_e, s) => cb(s)),
 });

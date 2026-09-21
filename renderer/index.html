@@ -8,21 +8,6 @@
   <link rel="stylesheet" href="styles.css" />
 </head>
 <body>
-  <!-- ===== Launch modal ===== -->
-  <div id="modal" class="modal" hidden>
-    <div class="modal-card">
-      <div class="modal-eyebrow" id="modalDate">Today</div>
-      <h1 class="modal-title">Today's Reading</h1>
-      <p class="modal-sub" id="modalSub">Your chapters for today</p>
-      <div id="modalChapters" class="modal-chapters"></div>
-      <div class="modal-actions">
-        <button id="startReadingBtn" class="btn btn-primary btn-lg">Start Reading</button>
-        <button id="browseBtn" class="btn btn-ghost">Just browse</button>
-      </div>
-      <div id="modalDone" class="modal-done" hidden>✓ You've completed today's reading</div>
-    </div>
-  </div>
-
   <!-- ===== App shell ===== -->
   <header class="topbar">
     <div class="brand">
@@ -69,7 +54,7 @@
           <button id="fontDown" class="btn btn-icon" title="Smaller text">A−</button>
           <button id="fontUp" class="btn btn-icon" title="Larger text">A+</button>
           <button id="focusToggle" class="btn btn-icon" title="Focus mode: highlight one section at a time">Focus</button>
-          <button id="studyBtn" class="btn btn-icon btn-study" title="AI study helper for this chapter">Study</button>
+          <button id="studyBtn" class="btn btn-icon btn-study" title="Show/hide the AI study helper panel">✦ Helper</button>
         </div>
       </div>
       <div class="today-plan">
@@ -88,10 +73,62 @@
       <span id="todayDoneBadge" class="today-done-badge" hidden>✓ Completed today</span>
     </div>
 
-    <section class="reader">
-      <h2 id="chapterTitle" class="chapter-title">Genesis 1</h2>
-      <div id="chapterBody" class="chapter-body"></div>
-    </section>
+    <div class="read-main">
+      <section class="reader">
+        <h2 id="chapterTitle" class="chapter-title">Genesis 1</h2>
+        <div id="chapterBody" class="chapter-body"></div>
+      </section>
+
+      <aside id="aiPanel" class="ai-panel">
+        <div class="ai-panel-head">
+          <span class="ai-panel-title">✦ Study helper</span>
+          <button id="aiPanelClose" class="ai-panel-x" title="Hide helper">×</button>
+        </div>
+
+        <div id="aiSetup" class="ai-setup" hidden>
+          <div id="aiOllamaSetup" class="ai-prov-panel">
+            <p class="ai-setup-text">The study helper runs a small open-source model on your own computer — free, offline, and no API key.</p>
+            <div id="aiOllamaRunning" hidden>
+              <label class="field-inline">
+                <span class="field-label">Local model</span>
+                <select id="aiOllamaModel" class="select"></select>
+              </label>
+              <div class="ai-setup-actions">
+                <button id="aiOllamaSave" class="btn btn-primary btn-sm">Use this model</button>
+                <span id="aiOllamaMsg" class="ai-msg"></span>
+              </div>
+            </div>
+            <div id="aiOllamaMissing" hidden>
+              <p class="ai-setup-hint" id="aiInstallHint">Daily Bible can download and set up the model for you — a one-time <strong>~3.5&nbsp;GB</strong> download (Ollama plus the model). Needs an internet connection and a few minutes.</p>
+            </div>
+            <div class="ai-setup-actions">
+              <button id="aiOllamaInstall" class="btn btn-primary btn-sm">Install automatically</button>
+              <button id="aiOllamaRecheck" class="btn btn-sm">Re-check</button>
+            </div>
+            <div id="aiInstallBox" hidden>
+              <div class="ai-progress"><div id="aiInstallBar" class="ai-progress-fill"></div></div>
+              <div id="aiInstallMsg" class="ai-msg"></div>
+            </div>
+            <details class="ai-manual">
+              <summary>Set it up manually instead</summary>
+              <p class="ai-setup-hint">Install Ollama from ollama.com, start it, then in a terminal run:</p>
+              <pre class="ai-code">ollama pull llama3.2</pre>
+            </details>
+          </div>
+        </div>
+
+        <div id="aiMain" class="ai-main" hidden>
+          <div id="aiBody" class="ai-body">
+            <div id="aiPanelEmpty" class="ai-empty">Reading something unclear? Hover any section and click <strong>✦ Explain</strong> — I'll break it down right here. You can also ask a question below.</div>
+          </div>
+          <div class="ai-ask">
+            <input id="aiQuestion" class="date-input ai-question" type="text" placeholder="Ask about this chapter…" />
+            <button id="aiSend" class="btn btn-primary btn-sm">Ask</button>
+          </div>
+          <button id="aiForget" class="btn btn-ghost ai-forget">AI settings</button>
+        </div>
+      </aside>
+    </div>
   </main>
 
   <!-- ===== Search view ===== -->
@@ -114,6 +151,7 @@
       <button id="editPlanBtn2" class="btn btn-primary btn-sm">Create / edit plan</button>
     </div>
     <div id="planBooks" class="plan-books"></div>
+    <div id="planDetail" class="plan-detail" hidden></div>
   </main>
 
   <!-- ===== Bookmarks view ===== -->
@@ -164,6 +202,17 @@
         <button id="setStartBtn" class="btn btn-sm">Update start date</button>
         <span class="plan-controls-hint">Set an earlier date if you've already been reading.</span>
       </div>
+      <div class="plan-controls">
+        <label class="field-inline">
+          <span class="field-label">Already read up to</span>
+          <div class="catchup-selects">
+            <select id="catchupBook" class="select"></select>
+            <select id="catchupChapter" class="select select-sm"></select>
+          </div>
+        </label>
+        <button id="catchupBtn" class="btn btn-sm">Mark as read</button>
+        <span class="plan-controls-hint">Marks that book's chapters up to the one you pick, then opens the next chapter.</span>
+      </div>
     </section>
 
     <section class="panel">
@@ -192,43 +241,41 @@
         <h2 class="plan-modal-title">Your reading plan</h2>
         <button id="planClose" class="btn btn-ghost plan-close">✕</button>
       </div>
-      <p class="plan-modal-sub">Describe the plan you want and let AI build it — or set it up yourself below.</p>
+      <p class="plan-modal-sub">Tap the books you want to read, or let AI build a plan from a description. They'll be scheduled in order at your chosen pace.</p>
 
       <div class="ai-plan">
         <span class="plan-section-label">Ask AI to build your plan</span>
         <div class="ai-plan-row">
-          <input id="aiPlanPrompt" class="date-input ai-plan-input" type="text" placeholder="e.g. the New Testament in 60 days, or Psalms and the Gospels together" />
+          <input id="aiPlanPrompt" class="date-input ai-plan-input" type="text" placeholder="e.g. the New Testament in 60 days, or the Gospels and Psalms together" />
           <button id="aiPlanBtn" class="btn btn-primary btn-sm">Generate</button>
         </div>
         <span id="aiPlanMsg" class="ai-msg ai-plan-msg"></span>
       </div>
 
-      <div class="plan-divider"><span>or set it up yourself</span></div>
+      <div class="plan-divider"><span>or pick books yourself</span></div>
 
       <div class="plan-presets">
         <span class="plan-section-label">Quick start</span>
         <div class="preset-row">
+          <button class="preset" data-preset="whole">Whole Bible</button>
           <button class="preset" data-preset="nt">New Testament</button>
           <button class="preset" data-preset="gospels">Gospels</button>
           <button class="preset" data-preset="ot">Old Testament</button>
           <button class="preset" data-preset="torah">Torah</button>
           <button class="preset" data-preset="wisdom">Psalms &amp; Proverbs</button>
+          <button class="preset preset-clear" data-preset="clear">Clear</button>
         </div>
       </div>
 
-      <div class="plan-add">
-        <span class="plan-section-label">Add a book</span>
-        <div class="plan-add-row">
-          <select id="planBookSelect" class="select"></select>
-          <button id="planAddBtn" class="btn btn-sm">Add</button>
-        </div>
+      <div class="plan-pick">
+        <span class="plan-section-label">Pick books <span id="planPickCount" class="plan-note"></span></span>
+        <div id="planGroups" class="plan-groups"></div>
       </div>
 
-      <div class="plan-order-wrap">
-        <span class="plan-section-label">Your reading order <span id="planOrderCount" class="plan-note"></span></span>
+      <details id="planOrderWrap" class="plan-order-wrap" hidden>
+        <summary class="plan-section-label">Customize reading order <span id="planOrderCount" class="plan-note"></span></summary>
         <div id="planOrder" class="plan-order"></div>
-        <div id="planOrderEmpty" class="plan-empty" hidden>No books yet — use a quick start or add books above.</div>
-      </div>
+      </details>
 
       <div class="plan-footer">
         <label class="plan-pace">
@@ -242,65 +289,6 @@
           <button id="planUseDefault" class="btn btn-ghost">Use whole Bible</button>
           <button id="planSave" class="btn btn-primary">Save plan</button>
         </div>
-      </div>
-    </div>
-  </div>
-
-  <!-- ===== AI study helper ===== -->
-  <div id="aiModal" class="modal" hidden>
-    <div class="modal-card ai-card">
-      <div class="plan-modal-head">
-        <h2 class="plan-modal-title" id="aiTitle">Study</h2>
-        <button id="aiClose" class="btn btn-ghost plan-close">✕</button>
-      </div>
-
-      <div id="aiSetup" class="ai-setup" hidden>
-        <p class="ai-setup-text">Choose how the study helper runs. Local is free and offline; Claude is higher quality but needs an API key.</p>
-        <div class="ai-provider-tabs">
-          <button class="ai-prov" data-prov="ollama">Local &middot; free</button>
-          <button class="ai-prov" data-prov="anthropic">Claude (API key)</button>
-        </div>
-
-        <div id="aiOllamaSetup" class="ai-prov-panel" hidden>
-          <p class="ai-setup-text">Runs a small open-source model on your own computer with Ollama — free, offline, no key.</p>
-          <div id="aiOllamaRunning" hidden>
-            <label class="field-inline">
-              <span class="field-label">Local model</span>
-              <select id="aiOllamaModel" class="select"></select>
-            </label>
-            <div class="ai-setup-actions">
-              <button id="aiOllamaSave" class="btn btn-primary btn-sm">Use this model</button>
-              <span id="aiOllamaMsg" class="ai-msg"></span>
-            </div>
-          </div>
-          <div id="aiOllamaMissing" hidden>
-            <p class="ai-setup-hint">Ollama isn't detected. Install it from ollama.com, start it, then pull a small model in a terminal:</p>
-            <pre class="ai-code">ollama pull llama3.2</pre>
-            <button id="aiOllamaRecheck" class="btn btn-sm">Re-check</button>
-          </div>
-        </div>
-
-        <div id="aiAnthropicSetup" class="ai-prov-panel" hidden>
-          <p class="ai-setup-text">Uses Claude (the lightest model) via the Anthropic API. Needs your own API key, stored on this computer; a small per-use cost. Passage text is sent to Anthropic when you use it.</p>
-          <label class="field-inline">
-            <span class="field-label">Anthropic API key</span>
-            <input id="aiKeyInput" class="date-input ai-key-input" type="password" placeholder="sk-ant-..." />
-          </label>
-          <div class="ai-setup-actions">
-            <button id="aiSaveKey" class="btn btn-primary btn-sm">Save key</button>
-            <span id="aiSetupMsg" class="ai-msg"></span>
-          </div>
-          <p class="ai-setup-hint">Get a key at console.anthropic.com → API Keys.</p>
-        </div>
-      </div>
-
-      <div id="aiMain" class="ai-main" hidden>
-        <div id="aiBody" class="ai-body"></div>
-        <div class="ai-ask">
-          <input id="aiQuestion" class="date-input ai-question" type="text" placeholder="Ask a question about this chapter…" />
-          <button id="aiSend" class="btn btn-primary btn-sm">Ask</button>
-        </div>
-        <button id="aiForget" class="btn btn-ghost ai-forget">AI settings</button>
       </div>
     </div>
   </div>
