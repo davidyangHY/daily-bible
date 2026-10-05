@@ -6,9 +6,8 @@ const FONT_MIN = 16;
 const FONT_MAX = 30;
 const LS_FONT = 'db_font';
 const LS_LAST = 'db_last';
-const LS_FOCUS = 'db_focus';
+const LS_BIONIC = 'db_bionic';
 const LS_AIPANEL = 'db_aipanel';
-let scrollRaf = 0;
 
 const state = {
   bible: null,
@@ -21,7 +20,7 @@ const state = {
   bookmarks: new Set(), // refs "Book Chapter:Verse"
   calMonth: { year: new Date().getFullYear(), month: new Date().getMonth() },
   lastStats: null,
-  focus: false,
+  bionic: false,
   aiReady: false,
   planSelected: null,   // book selected in the plan overview
   allSelected: null,    // book selected in the all-books overview
@@ -58,13 +57,13 @@ async function init() {
   state.bible.books.forEach((b, i) => state.bookIndex.set(b.name, i));
 
   state.fontSize = clampFont(parseFloat(localStorage.getItem(LS_FONT)) || 19.5);
-  try { state.focus = localStorage.getItem(LS_FOCUS) === '1'; } catch { state.focus = false; }
+  try { state.bionic = localStorage.getItem(LS_BIONIC) === '1'; } catch { state.bionic = false; }
   await loadBookmarks();
   await setupVersions();
 
   populateBookSelect();
   wireControls();
-  $('focusToggle').classList.toggle('is-on', state.focus);
+  $('bionicToggle').classList.toggle('is-on', state.bionic);
 
   // Study helper panel: open by default (unless the user closed it last time).
   let aiOpen = true;
@@ -172,7 +171,7 @@ function renderChapter() {
     num.title = 'Click to bookmark';
     num.addEventListener('click', (e) => { e.stopPropagation(); toggleBookmark(verseNo, text); });
     span.appendChild(num);
-    span.appendChild(document.createTextNode(text + ' '));
+    appendReadingText(span, text + ' ');
     if (!section.dataset.from) section.dataset.from = String(verseNo);
     section.dataset.to = String(verseNo);
     section.appendChild(span);
@@ -184,11 +183,9 @@ function renderChapter() {
     explain.title = 'Explain this section with the study helper';
     explain.addEventListener('click', (e) => { e.stopPropagation(); explainSection(s); });
     s.appendChild(explain);
-    s.addEventListener('click', () => { if (state.focus) setActiveSection(s); });
   });
   document.querySelector('.reader').scrollTop = 0;
 
-  applyFocus();
   saveLastPosition();
   highlightPlanChip();
 }
@@ -215,35 +212,38 @@ async function changeVersion(id) {
   toast(`Switched to ${id}`);
 }
 
-// ---------- focus mode ----------
-function applyFocus() {
-  document.body.classList.toggle('focus-on', state.focus);
-  if (state.focus) updateActiveSection();
-  else document.querySelectorAll('#chapterBody .rsection.active').forEach((s) => s.classList.remove('active'));
+// ---------- bionic reading (ADHD-friendly) ----------
+// Bold the leading part of each word to give the eye a fixation point.
+function bionicBoldLen(word) {
+  const len = word.length;
+  if (len <= 3) return 1;
+  return Math.max(1, Math.round(len * 0.4));
 }
 
-function setActiveSection(target) {
-  document.querySelectorAll('#chapterBody .rsection').forEach((s) => s.classList.toggle('active', s === target));
-}
-
-function updateActiveSection() {
-  const reader = document.querySelector('.reader');
-  const sections = [...document.querySelectorAll('#chapterBody .rsection')];
-  if (!sections.length) return;
-  const line = reader.getBoundingClientRect().top + reader.clientHeight * 0.28;
-  let active = sections[0];
-  for (const s of sections) {
-    if (s.getBoundingClientRect().top <= line) active = s;
-    else break;
+// Append verse text to `container`, bolding word-starts when bionic mode is on.
+function appendReadingText(container, text) {
+  if (!state.bionic) {
+    container.appendChild(document.createTextNode(text));
+    return;
   }
-  sections.forEach((s) => s.classList.toggle('active', s === active));
+  // Split on whitespace runs, keeping the whitespace so spacing is preserved.
+  text.split(/(\s+)/).forEach((part) => {
+    if (!part) return;
+    if (/^\s+$/.test(part)) { container.appendChild(document.createTextNode(part)); return; }
+    const n = bionicBoldLen(part);
+    const b = document.createElement('b');
+    b.className = 'bionic';
+    b.textContent = part.slice(0, n);
+    container.appendChild(b);
+    if (n < part.length) container.appendChild(document.createTextNode(part.slice(n)));
+  });
 }
 
-function toggleFocus() {
-  state.focus = !state.focus;
-  $('focusToggle').classList.toggle('is-on', state.focus);
-  try { localStorage.setItem(LS_FOCUS, state.focus ? '1' : '0'); } catch { /* ignore */ }
-  applyFocus();
+function toggleBionic() {
+  state.bionic = !state.bionic;
+  $('bionicToggle').classList.toggle('is-on', state.bionic);
+  try { localStorage.setItem(LS_BIONIC, state.bionic ? '1' : '0'); } catch { /* ignore */ }
+  renderChapter();
 }
 
 // ---------- AI study helper ----------
@@ -1269,7 +1269,7 @@ function wireControls() {
   $('nextChapter').addEventListener('click', () => stepChapter(1));
   $('fontDown').addEventListener('click', () => setFont(-1.5));
   $('fontUp').addEventListener('click', () => setFont(1.5));
-  $('focusToggle').addEventListener('click', toggleFocus);
+  $('bionicToggle').addEventListener('click', toggleBionic);
   $('versionSelect').addEventListener('change', (e) => changeVersion(e.target.value));
   $('studyBtn').addEventListener('click', toggleAiPanel);
   $('aiPanelClose').addEventListener('click', closeAiPanel);
@@ -1280,10 +1280,6 @@ function wireControls() {
   $('aiOllamaRecheck').addEventListener('click', recheckOllama);
   $('aiOllamaInstall').addEventListener('click', autoInstallOllama);
   svc.onAiInstallProgress((s) => setInstallUi(s));
-  document.querySelector('.reader').addEventListener('scroll', () => {
-    if (!state.focus || scrollRaf) return;
-    scrollRaf = requestAnimationFrame(() => { scrollRaf = 0; updateActiveSection(); });
-  });
   $('markChapterReadBtn').addEventListener('click', markChapterRead);
   $('markCompleteBtn').addEventListener('click', markComplete);
   $('resetProgressBtn').addEventListener('click', resetProgress);

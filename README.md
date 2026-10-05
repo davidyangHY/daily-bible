@@ -18,8 +18,8 @@ redistributed.
 - Read any chapter, with a version picker (WEB, BSB, KJV), a book picker grouped
   by Old and New Testament, a chapter picker, previous/next buttons, and
   left/right arrow keys.
-- Focus mode: highlights the section you are reading and dims the rest, following
-  your scroll, so it is easy to keep your place.
+- Bionic reading: an ADHD-friendly toggle that bolds the start of each word to give
+  the eye fixation points and make it easier to keep your place.
 - Optional AI study helper in a side panel next to the passage: every section has an
   "Explain" button that breaks down that specific passage in the panel, and you can
   ask free-form questions about the chapter. It runs entirely on your own machine
