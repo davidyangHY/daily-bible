@@ -69,23 +69,6 @@ function setMeta(key, value) {
               ON CONFLICT(key) DO UPDATE SET value = excluded.value`).run(key, value);
 }
 
-/** The date the reading plan starts from (Day 1). Defaults to `today` on first use. */
-function getPlanStart(today) {
-  let start = getMeta('plan_start');
-  if (!start) {
-    start = today;
-    setMeta('plan_start', start);
-  }
-  return start;
-}
-
-/** Change the plan start date (Day 1). Expects "YYYY-MM-DD". */
-function setPlanStart(dateISO) {
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(dateISO)) throw new Error('Invalid date');
-  setMeta('plan_start', dateISO);
-  return { ok: true, planStart: dateISO };
-}
-
 /**
  * Custom plan config, or null when using the default (whole Bible in a year).
  * @returns {{ order: string[], pace: number } | null}
@@ -145,6 +128,15 @@ function getCompletedDates() {
 function getAllReadChapters() {
   const set = new Set();
   for (const r of db.prepare(`SELECT chapters FROM sessions`).all()) {
+    try { JSON.parse(r.chapters).forEach((c) => set.add(c)); } catch { /* ignore */ }
+  }
+  return [...set];
+}
+
+/** Distinct "Book Chapter" strings read on days before `date` ("YYYY-MM-DD"). */
+function getChaptersReadBefore(date) {
+  const set = new Set();
+  for (const r of db.prepare(`SELECT chapters FROM sessions WHERE date < ?`).all(date)) {
     try { JSON.parse(r.chapters).forEach((c) => set.add(c)); } catch { /* ignore */ }
   }
   return [...set];
@@ -275,6 +267,7 @@ module.exports = {
   getCompletedDates,
   getChaptersReadOn,
   getAllReadChapters,
+  getChaptersReadBefore,
   markChaptersRead,
   removeReadChapters,
   getStats,
@@ -285,8 +278,6 @@ module.exports = {
   setMeta,
   getAiCache,
   setAiCache,
-  getPlanStart,
-  setPlanStart,
   getPlanConfig,
   setPlanConfig,
   clearPlanConfig,

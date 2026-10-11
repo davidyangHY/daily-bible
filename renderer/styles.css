@@ -437,7 +437,6 @@ body.ai-open .ai-panel { display: flex; }
 }
 .rsection:hover .rsection-explain { opacity: 0.85; }
 .rsection-explain:hover { opacity: 1; background: var(--gold-bright); color: #3b2a1c; border-color: #916517; }
-.rsection.explaining { background: rgba(179, 128, 31, 0.09); border-radius: 8px; box-shadow: 0 0 0 6px rgba(179, 128, 31, 0.09); }
 
 /* ============ AI study helper ============ */
 #bionicToggle, #studyBtn { min-width: 58px; }
@@ -469,6 +468,7 @@ body.ai-open .ai-panel { display: flex; }
 .ai-progress-fill { height: 100%; width: 0; background: var(--gold); border-radius: 999px; transition: width 0.3s ease; }
 .ai-progress-fill.is-error { background: var(--red); }
 #aiInstallMsg { color: var(--ink-soft); }
+.ai-status-line { color: var(--ink-soft); font-size: 13.5px; margin-top: 0; }
 
 /* ============ Plan builder: AI plan + book picker ============ */
 .ai-plan { margin-bottom: 4px; }

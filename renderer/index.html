@@ -98,6 +98,7 @@
                 <span id="aiOllamaMsg" class="ai-msg"></span>
               </div>
             </div>
+            <p id="aiStatusLine" class="ai-setup-hint ai-status-line"></p>
             <div id="aiOllamaMissing" hidden>
               <p class="ai-setup-hint" id="aiInstallHint">Daily Bible can download and set up the model for you — a one-time <strong>~3.5&nbsp;GB</strong> download (Ollama plus the model). Needs an internet connection and a few minutes.</p>
             </div>
@@ -201,14 +202,6 @@
         </div>
       </div>
       <div class="mini-progress big"><div id="planProgressBar" class="mini-progress-fill"></div></div>
-      <div class="plan-controls">
-        <label class="field-inline">
-          <span class="field-label">Start date (Day 1)</span>
-          <input type="date" id="startDateInput" class="date-input" />
-        </label>
-        <button id="setStartBtn" class="btn btn-sm">Update start date</button>
-        <span class="plan-controls-hint">Set an earlier date if you've already been reading.</span>
-      </div>
       <div class="plan-controls">
         <label class="field-inline">
           <span class="field-label">Already read up to</span>

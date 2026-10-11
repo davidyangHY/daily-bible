@@ -24,9 +24,11 @@ redistributed.
   "Explain" button that breaks down that specific passage in the panel, and you can
   ask free-form questions about the chapter. It runs entirely on your own machine
   through a small open-source model via [Ollama](https://ollama.com) — free, offline,
-  and no API key. The app can download and set it up for you in one click (a one-time
-  ~3.5 GB download), or you can install Ollama yourself and run `ollama pull llama3.2`.
-  Explanations are cached per passage so repeat views are instant.
+  and no API key. If Ollama is installed, the app starts it when needed and uses
+  whatever model is available — no setup prompts. If it isn't installed, the app can
+  set it up once in one click (a one-time ~3.5 GB download), or you can install Ollama
+  yourself and run `ollama pull llama3.2`. Explanations are cached per passage so
+  repeat views are instant.
 - Section headings above each passage (for example "The Genealogy of Jesus" or
   "Jesus Calms the Storm"). The WEB ships none, so these are the public-domain
   Berean Standard Bible headings, matched to each verse (`assets/headings.json`).
@@ -44,6 +46,9 @@ redistributed.
   Psalms & Proverbs) and a live "books · chapters · days" estimate. Choose a pace in
   chapters per day; optionally reorder the books. Falls back to the whole Bible in a
   year if you do not build one.
+- The plan follows your progress, not the calendar: each day's reading is the next
+  unread chapters in plan order, so a missed day carries over instead of skipping
+  ahead.
 - Catch up: from Progress, pick a book and chapter under "Already read up to" to mark
   everything up to there as read and jump the reader to the next chapter.
 - Plan tab: every book in your plan shown at once as a compact grid of tiles (Old
@@ -55,8 +60,7 @@ redistributed.
   the tray.
 - Streaks (current and longest), days completed, and chapters read.
 - Month calendar marking each day you completed your reading.
-- Change the plan start date (Day 1), or reset progress (with a confirmation;
-  bookmarks are kept).
+- Reset progress (with a confirmation; bookmarks are kept).
 - Progress is stored in a local SQLite database.
 
 ### Desktop

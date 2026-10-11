@@ -265,35 +265,39 @@ function closeAiPanel() {
 }
 function toggleAiPanel() { isAiPanelOpen() ? closeAiPanel() : openAiPanel(); }
 
+let aiPollTimer = 0;
+
+// Check the local model and show the panel or its setup. While Ollama is
+// starting (e.g. right after login) it keeps checking on its own.
 async function refreshAiPanel() {
   const st = await svc.aiStatus();
   state.aiReady = !!st.ready;
   $('aiSetup').hidden = st.ready;
   $('aiMain').hidden = !st.ready;
   if (!st.ready) showSetup(st);
+  clearTimeout(aiPollTimer);
+  if (st.state === 'starting') aiPollTimer = setTimeout(refreshAiPanel, 3000);
+  else if (st.state === 'stopped') aiPollTimer = setTimeout(refreshAiPanel, 15000);
+  return st;
 }
 
 function showSetup(st) {
   $('aiSetup').hidden = false;
-  renderOllamaPanel(st.ollama);
+  renderOllamaPanel(st);
 }
 
-function renderOllamaPanel(oll) {
-  const running = !!(oll && oll.running);
-  const hasModels = running && oll.models.length > 0;
-  $('aiOllamaRunning').hidden = !hasModels;
-  $('aiOllamaMissing').hidden = running;
+const AI_STATUS_TEXT = {
+  starting: 'Starting the local study helper… this can take a few seconds after your computer starts.',
+  stopped: "Ollama is installed but hasn't started. Open the Ollama app — this panel will pick it up automatically.",
+  nomodel: 'Ollama is running but has no model yet. Download one to use the study helper.',
+  missing: 'Ollama is not installed on this computer.',
+};
 
-  const installBtn = $('aiOllamaInstall');
-  if (!running) {
-    installBtn.hidden = false;
-    installBtn.textContent = 'Install automatically';
-  } else if (!hasModels) {
-    installBtn.hidden = false;
-    installBtn.textContent = 'Download model (llama3.2)';
-    $('aiOllamaMsg').textContent = '';
-  } else {
-    installBtn.hidden = true;
+function renderOllamaPanel(st) {
+  const oll = st.ollama || { models: [] };
+  const settings = st.state === 'ready'; // opened from "AI settings"
+  $('aiOllamaRunning').hidden = !settings;
+  if (settings) {
     const sel = $('aiOllamaModel');
     sel.innerHTML = '';
     oll.models.forEach((m) => {
@@ -302,13 +306,23 @@ function renderOllamaPanel(oll) {
       o.textContent = m;
       sel.appendChild(o);
     });
-    if (oll.model && oll.models.includes(oll.model)) sel.value = oll.model;
+    if (oll.model) sel.value = oll.model;
     $('aiOllamaMsg').textContent = '';
   }
+  $('aiStatusLine').hidden = settings;
+  $('aiStatusLine').textContent = AI_STATUS_TEXT[st.state] || '';
+
+  // Only offer to install when Ollama genuinely isn't (and never was) installed.
+  const offerInstall = st.state === 'missing' && !st.installedBefore;
+  $('aiOllamaMissing').hidden = !offerInstall;
+  const btn = $('aiOllamaInstall');
+  btn.hidden = !(offerInstall || st.state === 'nomodel');
+  btn.textContent = st.state === 'nomodel' ? 'Download model (llama3.2)' : 'Install automatically';
+  $('aiOllamaRecheck').hidden = settings || st.state === 'starting';
 }
 
 async function recheckOllama() {
-  renderOllamaPanel((await svc.aiStatus()).ollama);
+  await refreshAiPanel();
 }
 
 function setInstallUi(s) {
@@ -368,9 +382,11 @@ function hidePanelEmpty() {
 async function ensureAiReady() {
   if (!isAiPanelOpen()) openAiPanel();
   if (state.aiReady) return true;
-  await refreshAiPanel();
+  const st = await refreshAiPanel();
   if (!state.aiReady) {
-    toast('Set up the study helper first (right panel)');
+    toast(st.state === 'starting'
+      ? 'The study helper is still starting — try again in a moment'
+      : 'The study helper isn’t available yet (see the right panel)');
     return false;
   }
   return true;
@@ -387,10 +403,6 @@ async function explainSection(sectionEl) {
   const chapter = state.chapter;
   const label = sectionEl.dataset.label || '';
   const ref = from === to ? `${book} ${chapter}:${from}` : `${book} ${chapter}:${from}–${to}`;
-
-  // Briefly flag which section is being explained.
-  document.querySelectorAll('#chapterBody .rsection.explaining').forEach((s) => s.classList.remove('explaining'));
-  sectionEl.classList.add('explaining');
 
   hidePanelEmpty();
   const card = aiCard(label ? `${label} · ${ref}` : ref, 'Thinking…');
@@ -591,6 +603,13 @@ function highlightPlanChip() {
 }
 
 async function updateTodayStrip() {
+  if (state.plan.finished) {
+    $('todayProgressBar').style.width = '100%';
+    $('todayProgressText').textContent = 'Plan complete ✓ — set up a new one in the Plan tab';
+    $('markCompleteBtn').hidden = true;
+    $('todayDoneBadge').hidden = true;
+    return;
+  }
   const total = state.plan.chapters.length; // today's goal (any chapters count)
   const readToday = await svc.getChaptersReadToday(); // distinct chapters read today, any book
   const readCount = Math.min(readToday.length, total);
@@ -633,17 +652,6 @@ async function resetProgress() {
   await svc.resetProgress();
   await reloadPlanAndStats();
   toast('Progress reset — starting at Day 1');
-}
-
-async function applyStartDate() {
-  const val = $('startDateInput').value;
-  if (!val) {
-    toast('Pick a start date first');
-    return;
-  }
-  await svc.setPlanStart(val);
-  await reloadPlanAndStats();
-  toast(`Start date updated — you're on Day ${state.plan.day}`);
 }
 
 // Re-fetch the plan and refresh everything that depends on it.
@@ -943,9 +951,8 @@ async function applyCatchup() {
   const labels = [];
   for (let c = 1; c <= upTo; c++) labels.push(`${name} ${c}`);
   await svc.markChaptersRead(labels);
-  await refreshStats();
-  await updateTodayStrip();
-  if (!$('view-plan').hidden) await renderPlanView();
+  await svc.recomputePlan(); // today's plan moves past what you caught up on
+  await reloadPlanAndStats();
 
   const total = state.bible.books[bi].chapters.length;
   if (upTo < total) goToChapter(bi, upTo + 1);
@@ -1162,16 +1169,13 @@ async function refreshStats() {
   $('statDays').textContent = stats.daysCompleted;
   $('statChapters').textContent = stats.chaptersRead;
 
-  // plan progress
+  // plan progress (based on chapters read, not days elapsed)
   const day = state.plan ? state.plan.day : 1;
   const totalDays = state.plan ? state.plan.totalDays || 365 : 365;
-  const pct = Math.round((day / totalDays) * 100);
-  $('planProgressLabel').textContent = `Day ${day} of ${totalDays} · ${pct}%`;
+  const finished = !!(state.plan && state.plan.finished);
+  const pct = finished ? 100 : Math.round(((day - 1) / totalDays) * 100);
+  $('planProgressLabel').textContent = finished ? 'Plan complete ✓' : `Day ${day} of ${totalDays} · ${pct}%`;
   $('planProgressBar').style.width = pct + '%';
-  if (state.plan) {
-    $('startDateInput').value = state.plan.start;
-    $('startDateInput').max = state.plan.date;
-  }
 
   $('calendarNote').textContent = `${stats.daysCompleted} day${stats.daysCompleted === 1 ? '' : 's'} completed · ${stats.totalSessions} session${stats.totalSessions === 1 ? '' : 's'}`;
   buildCalendar(stats);
@@ -1283,7 +1287,6 @@ function wireControls() {
   $('markChapterReadBtn').addEventListener('click', markChapterRead);
   $('markCompleteBtn').addEventListener('click', markComplete);
   $('resetProgressBtn').addEventListener('click', resetProgress);
-  $('setStartBtn').addEventListener('click', applyStartDate);
   $('editPlanBtn').addEventListener('click', openPlanBuilder);
   $('editPlanBtn2').addEventListener('click', openPlanBuilder);
   $('planClose').addEventListener('click', closePlanBuilder);

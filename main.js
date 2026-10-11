@@ -11,10 +11,10 @@ const path = require('path');
 const fs = require('fs');
 const https = require('https');
 const http = require('http');
-const { execFile } = require('child_process');
+const { execFile, spawn } = require('child_process');
 
 const db = require('./db');
-const { getPlanForDate } = require('./readingPlan');
+const { planChapters, nextChapters, chapterLabel } = require('./readingPlan');
 
 const ICON_PATH = path.join(__dirname, 'assets', 'icon.png');
 const NOTIFY_HOUR = 20; // 8pm
@@ -94,27 +94,70 @@ function todayISO() {
   return `${y}-${m}-${day}`;
 }
 
+/**
+ * Today's reading follows your progress, not the calendar: it's the next unread
+ * chapters in plan order, so a missed day carries over instead of skipping
+ * ahead. It's fixed once per day (stored as `plan_cursor`) so the chapters you
+ * read today stay on today's list instead of sliding forward.
+ */
 function todayPlan() {
-  const start = db.getPlanStart(todayISO());
+  const today = todayISO();
   const config = db.getPlanConfig();
-  return getPlanForDate(bible.books, new Date(), start, config);
+  const { all, pace } = planChapters(bible.books, config);
+  const sig = JSON.stringify(config);
+  const byLabel = new Map(all.map((c) => [chapterLabel(c), c]));
+
+  let cursor = null;
+  try { cursor = JSON.parse(db.getMeta('plan_cursor') || 'null'); } catch { cursor = null; }
+  let labels;
+  if (cursor && cursor.date === today && cursor.sig === sig && Array.isArray(cursor.labels)
+      && cursor.labels.every((l) => byLabel.has(l))) {
+    labels = cursor.labels;
+  } else {
+    // Chapters read before today count as done; today's reads stay on today's list.
+    const before = new Set(db.getChaptersReadBefore(today));
+    labels = nextChapters(all, pace, before).map(chapterLabel);
+    db.setMeta('plan_cursor', JSON.stringify({ date: today, sig, labels }));
+  }
+
+  const totalDays = Math.max(1, Math.ceil(all.length / pace));
+  const readAll = new Set(db.getAllReadChapters());
+  const todaySet = new Set(labels);
+  let done = 0;
+  for (const c of all) {
+    const l = chapterLabel(c);
+    if (readAll.has(l) && !todaySet.has(l)) done++;
+  }
+  return {
+    day: Math.min(totalDays, Math.floor(done / pace) + 1),
+    totalDays,
+    finished: labels.length === 0,
+    chapters: labels.map((l) => byLabel.get(l)),
+  };
+}
+
+/** Recompute today's chapters from everything read so far (e.g. after catching up). */
+function resetPlanCursor() {
+  db.setMeta('plan_cursor', '');
+  const config = db.getPlanConfig();
+  const { all, pace } = planChapters(bible.books, config);
+  const labels = nextChapters(all, pace, new Set(db.getAllReadChapters())).map(chapterLabel);
+  db.setMeta('plan_cursor', JSON.stringify({ date: todayISO(), sig: JSON.stringify(config), labels }));
 }
 
 function planChapterLabels() {
-  return todayPlan().chapters.map((c) => `${c.book} ${c.chapter}`);
+  return todayPlan().chapters.map(chapterLabel);
 }
 
-/** The plan's chapter labels for a specific date. */
-function dayPlanLabels(dateISO) {
-  const start = db.getPlanStart(todayISO());
-  const config = db.getPlanConfig();
-  const plan = getPlanForDate(bible.books, new Date(dateISO + 'T00:00:00'), start, config);
-  return plan.chapters.map((c) => `${c.book} ${c.chapter}`);
-}
-
-/** A day is complete when at least the day's target number of chapters (any) is read. */
+/** A day is complete when at least that day's target number of chapters (any) is read. */
 function isDayComplete(dateISO) {
-  const target = dayPlanLabels(dateISO).length;
+  let target;
+  if (dateISO === todayISO()) {
+    target = todayPlan().chapters.length;
+  } else {
+    const { all, pace } = planChapters(bible.books, db.getPlanConfig());
+    target = Math.min(pace, all.length);
+  }
   if (!target) return false;
   return db.getChaptersReadOn(dateISO).length >= target;
 }
@@ -252,21 +295,103 @@ function pullModel(model) {
   });
 }
 
-/** One-click setup: install Ollama if needed, pull the default model, select it. */
+/** Path to an installed ollama.exe, or null. */
+function ollamaExePath() {
+  const local = process.env.LOCALAPPDATA || '';
+  const pf = process.env.ProgramFiles || 'C:\\Program Files';
+  const candidates = [
+    path.join(local, 'Programs', 'Ollama', 'ollama.exe'),
+    path.join(pf, 'Ollama', 'ollama.exe'),
+  ];
+  return candidates.find((p) => fs.existsSync(p)) || null;
+}
+
+function isProcessRunning(imageName) {
+  return new Promise((resolve) => {
+    execFile('tasklist', ['/FI', `IMAGENAME eq ${imageName}`, '/NH'], { windowsHide: true }, (err, out) => {
+      resolve(!err && String(out).toLowerCase().includes(imageName.toLowerCase()));
+    });
+  });
+}
+
+let ollamaFirstWait = 0; // when we first saw Ollama installed but its server down
+let ollamaLastKick = 0;
+
+/** Ollama is installed but not serving: start it, unless it is already starting. */
+async function kickOllamaStart() {
+  if (Date.now() - ollamaLastKick < 20000) return;
+  ollamaLastKick = Date.now();
+  // At login Ollama launches itself; if its process exists, just wait for it.
+  if ((await isProcessRunning('ollama.exe')) || (await isProcessRunning('ollama app.exe'))) return;
+  const exe = ollamaExePath();
+  if (!exe) return;
+  const appExe = path.join(path.dirname(exe), 'ollama app.exe');
+  try {
+    const child = fs.existsSync(appExe)
+      ? spawn(appExe, [], { detached: true, stdio: 'ignore', windowsHide: true })
+      : spawn(exe, ['serve'], { detached: true, stdio: 'ignore', windowsHide: true });
+    child.unref();
+  } catch { /* ignore */ }
+}
+
+/** The stored model if still installed, else llama3.2, else whatever is available. */
+function pickModel(models) {
+  const stored = db.getMeta('ollama_model');
+  if (stored && models.includes(stored)) return stored;
+  return models.find((m) => m === DEFAULT_MODEL || m.startsWith(DEFAULT_MODEL + ':')) || models[0] || '';
+}
+
+/**
+ * Where the local AI stands. Never suggests installing when Ollama is already
+ * installed — it starts it and uses whatever model is available.
+ *   ready    — serving, model selected
+ *   nomodel  — serving, but no model pulled yet
+ *   starting — installed, server coming up
+ *   stopped  — installed, but it didn't come up after a while
+ *   missing  — not installed
+ */
+async function aiStatus() {
+  const oll = await ollamaModels();
+  const installed = !!ollamaExePath();
+  const none = { running: false, models: [], model: '' };
+  if (oll.running) {
+    ollamaFirstWait = 0;
+    if (installed) db.setMeta('ollama_installed', '1');
+    if (!oll.models.length) return { state: 'nomodel', ollama: { running: true, models: [], model: '' }, ready: false };
+    const model = pickModel(oll.models);
+    if (model !== db.getMeta('ollama_model')) db.setMeta('ollama_model', model);
+    return { state: 'ready', ollama: { running: true, models: oll.models, model }, ready: true };
+  }
+  if (installed) {
+    if (!ollamaFirstWait) ollamaFirstWait = Date.now();
+    kickOllamaStart().catch(() => {});
+    const state = Date.now() - ollamaFirstWait < 90000 ? 'starting' : 'stopped';
+    return { state, ollama: none, ready: false };
+  }
+  return { state: 'missing', installedBefore: db.getMeta('ollama_installed') === '1', ollama: none, ready: false };
+}
+
+/** One-click setup: install Ollama only if it isn't installed, pull a model if none, select it. */
 async function autoSetupOllama() {
   try {
     let oll = await ollamaModels();
     if (!oll.running) {
-      await installOllama();
+      if (ollamaExePath()) {
+        sendInstallProgress('starting', 100, 'Starting Ollama…');
+        await kickOllamaStart();
+        if (!(await waitForOllama(60000))) throw new Error("Ollama is installed but didn't start. Open it once, then click Re-check.");
+      } else {
+        await installOllama();
+      }
+      db.setMeta('ollama_installed', '1');
       oll = await ollamaModels();
     }
-    const has = (list) => list.some((m) => m === DEFAULT_MODEL || m.startsWith(DEFAULT_MODEL + ':'));
-    if (!has(oll.models)) {
+    if (!oll.models.length) {
       sendInstallProgress('pulling', 0, `Downloading ${DEFAULT_MODEL} (about 2 GB)…`);
       await pullModel(DEFAULT_MODEL);
       oll = await ollamaModels();
     }
-    const chosen = oll.models.find((m) => m === DEFAULT_MODEL || m.startsWith(DEFAULT_MODEL + ':')) || DEFAULT_MODEL;
+    const chosen = pickModel(oll.models) || DEFAULT_MODEL;
     db.setMeta('ollama_model', chosen);
     sendInstallProgress('done', 100, 'Ready.');
     return { ok: true, model: chosen };
@@ -277,8 +402,12 @@ async function autoSetupOllama() {
 }
 
 async function callAI(system, userText, maxTokens) {
-  const model = db.getMeta('ollama_model');
-  if (!model) return { error: 'No local model selected.' };
+  let model = db.getMeta('ollama_model');
+  if (!model) {
+    const st = await aiStatus(); // auto-selects an available model
+    model = st.ollama.model;
+  }
+  if (!model) return { error: 'The local model is still starting — try again in a moment.' };
   try {
     const r = await fetch(`${OLLAMA_URL}/api/chat`, {
       method: 'POST',
@@ -515,27 +644,28 @@ function registerIpc() {
   });
   ipcMain.handle('plan:today', () => ({
     date: todayISO(),
-    start: db.getPlanStart(todayISO()),
     config: db.getPlanConfig(),
     ...todayPlan(),
   }));
-  ipcMain.handle('plan:setStart', (_e, dateISO) => {
-    const res = db.setPlanStart(dateISO);
-    rebuildTrayMenu();
-    if (mainWindow) mainWindow.webContents.send('data:changed');
-    return res;
-  });
   ipcMain.handle('plan:save', (_e, cfg) => {
     const res = db.setPlanConfig({ order: cfg.order, pace: cfg.pace, start: todayISO() });
+    resetPlanCursor();
     rebuildTrayMenu();
     if (mainWindow) mainWindow.webContents.send('data:changed');
     return res;
   });
   ipcMain.handle('plan:clear', () => {
     const res = db.clearPlanConfig(todayISO());
+    resetPlanCursor();
     rebuildTrayMenu();
     if (mainWindow) mainWindow.webContents.send('data:changed');
     return res;
+  });
+  // After catching up, pick today's chapters from everything read so far.
+  ipcMain.handle('plan:recompute', () => {
+    resetPlanCursor();
+    rebuildTrayMenu();
+    return { ok: true };
   });
   ipcMain.handle('stats:get', () => {
     const activity = db.getCompletedDates(); // dates with any reading, ascending
@@ -580,12 +710,7 @@ function registerIpc() {
   ipcMain.handle('bookmark:list', () => db.getBookmarks());
 
   // ---- AI helper (local Ollama only) ----
-  ipcMain.handle('ai:status', async () => {
-    const oll = await ollamaModels();
-    const model = db.getMeta('ollama_model') || '';
-    const ready = oll.running && !!model && oll.models.includes(model);
-    return { ollama: { running: oll.running, models: oll.models, model }, ready };
-  });
+  ipcMain.handle('ai:status', () => aiStatus());
   ipcMain.handle('ai:setOllamaModel', (_e, model) => { db.setMeta('ollama_model', String(model || '')); return { ok: true }; });
   ipcMain.handle('ai:autoSetup', () => autoSetupOllama());
   ipcMain.handle('ai:explainPassage', (_e, { book, chapter, from, to, label }) => aiExplainPassage(book, chapter, from, to, label));
@@ -594,6 +719,7 @@ function registerIpc() {
 
   ipcMain.handle('progress:reset', () => {
     const res = db.resetProgress(todayISO());
+    resetPlanCursor();
     rebuildTrayMenu();
     if (mainWindow) mainWindow.webContents.send('data:changed');
     return res;

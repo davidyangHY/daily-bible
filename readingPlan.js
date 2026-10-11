@@ -1,8 +1,11 @@
 /*
- * Reading plan: distributes all 1,189 chapters of the Bible evenly across a
- * 365-day year. Day 1 is the plan's start date, so a fresh start begins at the
- * beginning of the plan (not the current day-of-year). The plan repeats
- * annually after 365 days.
+ * Reading plan: an ordered list of chapters plus a daily pace.
+ * - Default (no custom plan): the whole Bible in canonical order, at the pace
+ *   that finishes it within a year.
+ * - Custom: the chosen books in order, at the chosen chapters per day.
+ *
+ * The plan follows your progress rather than the calendar: each day's reading
+ * is the next unread chapters in plan order, so a missed day never skips ahead.
  */
 
 /** Build a flat, canonical list of { book, chapter } from bible metadata. */
@@ -28,48 +31,34 @@ function buildChapterListFromOrder(books, order) {
   return list;
 }
 
-/** Whole days between two local dates (b - a). */
-function daysBetween(aISO, bDate) {
-  const a = new Date(aISO + 'T00:00:00');
-  const b = new Date(bDate.getFullYear(), bDate.getMonth(), bDate.getDate());
-  return Math.floor((b - a) / 86400000);
+const chapterLabel = (c) => `${c.book} ${c.chapter}`;
+
+/**
+ * The plan's full chapter list and daily pace.
+ * @param {Array}  books   bible.books (each has { name, chapters: [...] })
+ * @param {object} config  { order: string[], pace: number } | null
+ * @returns {{ all: Array<{book,chapter}>, pace: number }}
+ */
+function planChapters(books, config = null) {
+  const custom = config && Array.isArray(config.order) && config.order.length;
+  const all = custom ? buildChapterListFromOrder(books, config.order) : buildChapterList(books);
+  const pace = custom ? Math.max(1, config.pace || 3) : Math.max(1, Math.ceil(all.length / 365));
+  return { all, pace };
 }
 
 /**
- * Returns the chapters scheduled for `date`.
- * - Default (config null): whole Bible, evenly across 365 days.
- * - Custom (config = { order, pace }): the selected books in order, `pace`
- *   chapters per day; the plan length is ceil(chapters / pace) days.
- * In both cases the schedule repeats once it reaches the end.
- *
- * @param {Array}  books    bible.books (each has { name, chapters: [...] })
- * @param {Date}   date     the day to look up (defaults to now)
- * @param {string} startISO plan start date "YYYY-MM-DD" (Day 1)
- * @param {object} config   { order: string[], pace: number } | null
- * @returns {{ day:number, totalDays:number, chapters: Array<{book,chapter}> }}
+ * The next `pace` chapters in plan order that aren't in `readSet`.
+ * Empty when the whole plan has been read.
  */
-function getPlanForDate(books, date = new Date(), startISO = null, config = null) {
-  const custom = config && Array.isArray(config.order) && config.order.length;
-  const all = custom ? buildChapterListFromOrder(books, config.order) : buildChapterList(books);
-  const total = all.length || 1;
-
-  let elapsed = startISO ? daysBetween(startISO, date) : 0;
-  if (elapsed < 0) elapsed = 0;
-
-  if (custom) {
-    const pace = Math.max(1, config.pace || 3);
-    const totalDays = Math.max(1, Math.ceil(total / pace));
-    const dayIndex = ((elapsed % totalDays) + totalDays) % totalDays;
-    const start = dayIndex * pace;
-    const end = Math.min(start + pace, total);
-    return { day: dayIndex + 1, totalDays, chapters: all.slice(start, end) };
+function nextChapters(all, pace, readSet) {
+  const out = [];
+  for (const c of all) {
+    if (!readSet.has(chapterLabel(c))) {
+      out.push(c);
+      if (out.length >= pace) break;
+    }
   }
-
-  const DAYS = 365;
-  const dayIndex = ((elapsed % DAYS) + DAYS) % DAYS;
-  const start = Math.floor((dayIndex * total) / DAYS);
-  const end = Math.floor(((dayIndex + 1) * total) / DAYS);
-  return { day: dayIndex + 1, totalDays: DAYS, chapters: all.slice(start, end) };
+  return out;
 }
 
-module.exports = { getPlanForDate, buildChapterList, buildChapterListFromOrder };
+module.exports = { planChapters, nextChapters, chapterLabel, buildChapterList, buildChapterListFromOrder };

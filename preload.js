@@ -18,7 +18,7 @@ contextBridge.exposeInMainWorld('api', {
   logSession: (payload) => ipcRenderer.invoke('session:log', payload),
   markTodayComplete: () => ipcRenderer.invoke('today:complete'),
   resetProgress: () => ipcRenderer.invoke('progress:reset'),
-  setPlanStart: (dateISO) => ipcRenderer.invoke('plan:setStart', dateISO),
+  recomputePlan: () => ipcRenderer.invoke('plan:recompute'),
   savePlan: (cfg) => ipcRenderer.invoke('plan:save', cfg),
   clearPlan: () => ipcRenderer.invoke('plan:clear'),
 
